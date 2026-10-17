@@ -3,7 +3,7 @@
 """Serveur de test local du viewer RuneRide Météo (PoC J1).
 
 - sert la page (dossier viewer/) à la racine ;
-- monte out/tiles sous /data/ (et, si présents, out/tiles-synth sous /data-synth/,
+- monte out/tiles sous /data/, out/tiles-reduit2 sous /data-reduit2/, le fond de carte out/basemap sous /basemap/ (et, si présents, out/tiles-synth sous /data-synth/,
   out/tiles-reduit sous /data-reduit/ (profil de poids reduit), out/tiles-synth-sans sous /data-sans/, out/tiles-synth-brute sous /data-brute/) ;
 - gère les requêtes HTTP Range (206, 416) indispensables à PMTiles, et sert les
   .pmtiles en application/octet-stream ;
@@ -27,6 +27,8 @@ RACINE = os.path.dirname(os.path.abspath(__file__))
 DEPOT = os.path.dirname(RACINE)
 MONTAGES = {
     "/data": os.path.join(DEPOT, "out", "tiles"),
+    "/basemap": os.path.join(DEPOT, "out", "basemap"),
+    "/data-reduit2": os.path.join(DEPOT, "out", "tiles-reduit2"),
     "/data-reduit": os.path.join(DEPOT, "out", "tiles-reduit"),
     "/data-synth": os.path.join(DEPOT, "out", "tiles-synth"),
     "/data-sans": os.path.join(DEPOT, "out", "tiles-synth-sans"),

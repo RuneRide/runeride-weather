@@ -2,7 +2,7 @@
 // Page de visualisation RuneRide Météo (PoC J1) : carte MapLibre + calque WebGL de données.
 import { COUCHES, TUILE, couleurPalette, paramsDecodage } from './config.js';
 import { CoucheDonnees, tuilesVisibles } from './couche-gl.js';
-import { archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surTuile } from './donnees.js';
+import { SourceCompteuse, archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surTuile } from './donnees.js';
 import { Surcouche } from './fleches.js';
 
 const T0 = performance.timeOrigin; // début de navigation, pour les mesures
@@ -14,7 +14,7 @@ const mesures = { nom: params.get('nom') || 'mesures', date: new Date().toISOStr
 const jalon = (nom) => { mesures.jalons[nom] = Math.round((performance.now()) * 10) / 10; };
 
 // ---------------------------------------------------------------- état
-const MONTAGES = { data: '/data', reduit: '/data-reduit', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
+const MONTAGES = { reduit2: '/data-reduit2', data: '/data', reduit: '/data-reduit', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
 const ZOOMS_MODELE = { 'arome-hd': [5, 8], arome: [3, 7] };
 const etat = {
   base: '', index: null, modele: 'arome-hd', tirage: null,
@@ -37,8 +37,8 @@ function resoudreTemps(couche, t) {
 
 // ---------------------------------------------------------------- inventaire des données
 async function choisirSource() {
-  const demande = params.get('profil') === 'reduit' ? 'reduit' : params.get('profil') === 'contrat' ? 'data' : (params.get('src') || 'auto');
-  const essais = demande === 'auto' ? ['data', 'synth'] : [demande];
+  const demande = { reduit2: 'reduit2', reduit: 'reduit', contrat: 'data' }[params.get('profil')] || params.get('src') || 'auto';
+  const essais = demande === 'auto' ? ['reduit2', 'data', 'synth'] : [demande];
   for (const nom of essais) {
     try {
       const idx = await (await fetch(MONTAGES[nom] + '/index.json')).json();
@@ -58,20 +58,39 @@ async function choisirSource() {
 }
 
 // ---------------------------------------------------------------- carte
-const styleSombre = {
-  version: 8, name: 'RuneRide sombre',
-  sources: { pays: { type: 'geojson', data: 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@v5.1.2/geojson/ne_50m_admin_0_countries.geojson' } },
-  layers: [
-    { id: 'fond', type: 'background', paint: { 'background-color': '#101214' } },
-    { id: 'terre', type: 'fill', source: 'pays', paint: { 'fill-color': '#1d2024' } },
-    { id: 'contours', type: 'line', source: 'pays', paint: { 'line-color': '#6b7078', 'line-width': 0.9 } },
-  ],
-};
+// Fond de carte : Protomaps (OSM) en PMTiles local, style @protomaps/basemaps, thème sombre par défaut (?theme=clair),
+// libellés en français. ?fond=0 : fond uni seulement (pour mesurer la part du fond).
+const OPACITE = Number(params.get('opacite') || 0.85);
+const AVEC_FOND = params.get('fond') !== '0';
+const THEME = ['clair', 'light'].includes(params.get('theme')) ? 'light' : 'dark';
+const URL_FOND = new URL('/basemap/domaine-z9.pmtiles', location.href).href;
+// couches du fond placées AU-DESSUS de la couche météo : routes, frontières, libellés, points d'intérêt
+// (terre, occupation du sol, eau et rivières restent EN DESSOUS : la météo se lit aussi sur la mer ; pistes d'aéroport sous la météo)
+const RE_HAUT = /^(roads_(?!runway|taxiway)|boundaries|places_|pois|water_label|water_waterway|earth_label|address|buildings)/;
+function construireStyle() {
+  const fond = THEME === 'dark' ? '#101214' : '#f0efe9';
+  if (!AVEC_FOND) return { version: 8, sources: {}, layers: [{ id: 'fond', type: 'background', paint: { 'background-color': fond } }] };
+  const protocole = new pmtiles.Protocol();
+  maplibregl.addProtocol('pmtiles', protocole.tile);
+  protocole.add(new pmtiles.PMTiles(new SourceCompteuse(URL_FOND, 'fond')));
+  return {
+    version: 8, name: 'RuneRide ' + THEME,
+    glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
+    sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/' + THEME,
+    sources: { protomaps: { type: 'vector', url: 'pmtiles://' + URL_FOND, attribution: '' } },
+    layers: basemaps.layers('protomaps', basemaps.namedFlavor(THEME), { lang: 'fr' }),
+  };
+}
+/** Identifiant de la première couche du fond qui doit rester au-dessus de la météo (null = tout en haut). */
+function idPremiereCoucheHaute() {
+  const l = map.getStyle().layers.find(q => RE_HAUT.test(q.id));
+  return l ? l.id : undefined;
+}
 let map, couchegl, surcouche;
 
 function creerCarte() {
   map = new maplibregl.Map({
-    container: 'carte', style: styleSombre, attributionControl: false, minZoom: 2.5, maxZoom: 10.5,
+    container: 'carte', style: construireStyle(), attributionControl: false, minZoom: 2.5, maxZoom: 10.5,
     bounds: [[-6, 41], [10.5, 51.5]], fitBoundsOptions: { padding: { top: 110, bottom: 190, left: 10, right: 10 } },
     pitchWithRotate: false, dragRotate: false, touchPitch: false, maxPitch: 0, fadeDuration: 0,
     canvasContextAttributes: { antialias: false },
@@ -96,7 +115,7 @@ function appliquer() {
   if (!r) return;
   const [zmin, zmax] = zoomsDe(c);
   const urlA = urlFichier(c.variable, r.a), urlB = r.b !== null ? urlFichier(c.variable, r.b) : null;
-  couchegl.definir({ couche: c, urlA, urlB, mix: r.mix, opacite: etat.opacite ?? 0.86, zmin, zmax, debug: etat.debug, sansBordure: etat.sansBordure });
+  couchegl.definir({ couche: c, urlA, urlB, mix: r.mix, opacite: etat.opacite ?? OPACITE, zmin, zmax, debug: etat.debug, sansBordure: etat.sansBordure });
   etat.cur = { urlA, urlB, mix: r.mix, zmin, zmax, r };
   majHeure(r);
   surcouche.planifier(etatSurcouche());
@@ -298,6 +317,7 @@ async function attendreCharge(max = 20000) {
 // ---------------------------------------------------------------- API pour les captures et le banc d'essai
 window.__app = {
   get surcouche() { return surcouche; },
+  carte() { return map; },
   etat,
   async aller({ couche, t, centre, zoom }) {
     if (centre || zoom != null) map.jumpTo({ center: centre ? [centre[1], centre[0]] : map.getCenter(), zoom: zoom ?? map.getZoom() });
@@ -323,6 +343,42 @@ window.__app = {
       requetes: stats.requetesDonnees - r0, ms: Math.round(performance.now() - t0), z: tv[0][0] };
   },
   fleches(on) { etat.sansFleches = !on; surcouche.planifier(etatSurcouche()); },
+  /** Alignement fond / météo : sur une bande de lignes traversant une côte, position de la plus forte variation du fond
+   *  (eau/terre, couche météo à opacité 0) et de la couche t2m rendue en niveaux de gris (mode debug), en pixels écran. */
+  async alignement(centre, zoom, t = 3, demiBande = 20) {
+    await this.aller({ couche: 't2m', t, centre, zoom });
+    const lire = () => new Promise(res => { map.once('render', () => {
+      const cv = map.getCanvas(), q = document.createElement('canvas'); q.width = cv.width; q.height = cv.height;
+      const g = q.getContext('2d', { willReadFrequently: true }); g.drawImage(cv, 0, 0); res(g.getImageData(0, 0, q.width, q.height));
+    }); map.triggerRepaint(); });
+    etat.opacite = 0; appliquer(); await attendreCharge(); const base = await lire();
+    etat.opacite = 1; etat.debug = true; appliquer(); await attendreCharge(); const meteo = await lire();
+    etat.debug = false; etat.opacite = OPACITE; appliquer();
+    const W = base.width, H = base.height, y0 = Math.floor(H / 2) - demiBande, y1 = Math.floor(H / 2) + demiBande;
+    const profil = img => { const p = new Float64Array(W); for (let y = y0; y < y1; y++) for (let x = 0; x < W; x++) { const i = (y * W + x) * 4; p[x] += (img.data[i] * 0.3 + img.data[i + 1] * 0.59 + img.data[i + 2] * 0.11) / (y1 - y0); } return p; };
+    const pic = p => { let m = 0, xm = 0; for (let x = 3; x < W - 3; x++) { const d = Math.abs(p[x + 2] - p[x - 2]); if (d > m) { m = d; xm = x; } } return { x: xm, amplitude: +m.toFixed(1) }; };
+    const b = pic(profil(base)), m = pic(profil(meteo));
+    return { zoom, fond_x: b.x, meteo_x: m.x, ecart_px: m.x - b.x, ampl_fond: b.amplitude, ampl_meteo: m.amplitude, dpr: W / map.getContainer().clientWidth };
+  },
+  /** Alignement géométrique sur les tuiles SYNTHÉTIQUES (disque sans donnée centré 2°E 49°N, rayon 1,1° en lon/lat) :
+   *  bord gauche attendu à lon 0,9° sur la ligne lat 49° ; comparé à la position projetée par MapLibre (map.project). */
+  async alignementSynth(zoom) {
+    await this.aller({ couche: 't2m', t: 2, centre: [49.0, 0.9], zoom });
+    etat.opacite = 1; etat.debug = true; appliquer(); await attendreCharge();
+    const img = await new Promise(res => { map.once('render', () => {
+      const cv = map.getCanvas(), q = document.createElement('canvas'); q.width = cv.width; q.height = cv.height;
+      const g = q.getContext('2d', { willReadFrequently: true }); g.drawImage(cv, 0, 0); res(g.getImageData(0, 0, q.width, q.height));
+    }); map.triggerRepaint(); });
+    etat.debug = false; etat.opacite = OPACITE; appliquer();
+    const d = img.width / map.getContainer().clientWidth, yv = map.project([0.9, 49.0]).y, xv = map.project([0.9, 49.0]).x;
+    const y = Math.round(yv * d), W = img.width;
+    // trou = pixels de fond (#101214 -> gris 16..20) ; on cherche la transition donnée -> trou en parcourant la ligne
+    const gris = x => img.data[(y * W + x) * 4];
+    let bord = null;
+    for (let x = 5; x < W - 5; x++) if (gris(x - 1) > 40 && gris(x) < 30 && gris(x + 1) < 30 && gris(x + 3) < 30) { bord = x; break; }
+    const pixelDonnee = 360 / (256 * 2 ** Math.min(8, Math.round(zoom + 1))) * (512 * 2 ** zoom / 360) / 1;   // pixels écran d'un pixel de donnée
+    return { zoom, attendu_px: +(xv * d).toFixed(1), mesure_px: bord, ecart_px: bord === null ? null : +(bord - xv * d).toFixed(1), pixel_donnee_en_px_ecran: +(pixelDonnee * d).toFixed(1) };
+  },
   opacite(o) { etat.opacite = o; appliquer(); },
   epingler(lat, lng) { etat.point = { lat, lng, epingle: true }; majInfo(); surcouche.planifier(etatSurcouche()); },
   pret: attendreCharge,
@@ -439,6 +495,7 @@ async function banc() {
     intervalle_median_ms: +(iv[Math.floor(iv.length / 2)] || 0).toFixed(1), intervalle_p95_ms: +(iv[Math.floor(iv.length * 0.95)] || 0).toFixed(1),
     octets_pendant: stats.octetsDonnees - o0, requetes_pendant: stats.requetesDonnees - r0, fleches: surcouche.nbFleches });
   rep('tuiles_ms', { n: stats.ms.length, moyen: +(stats.ms.reduce((a, b) => a + b, 0) / (stats.ms.length || 1)).toFixed(1) });
+  rep('fond', { actif: AVEC_FOND, ...stats.fond });
   rep('total', { octets: stats.octetsDonnees, requetes: stats.requetesDonnees, par_phase: stats.parPhase });
   // poids des bibliothèques et du fond de carte (ressources externes)
   rep('ressources', performance.getEntriesByType('resource').filter(e => !e.name.includes('.pmtiles'))
@@ -465,7 +522,7 @@ async function demarrer() {
   if (h.t != null) etat.t = h.t;
   construireCouches();
   $('modele').textContent = etat.modele === 'arome-hd' ? 'AROME HD' : 'AROME';
-  $('attrib-src').textContent = `· tuiles : ${etat.srcNom === 'data' ? 'profil contrat' : etat.srcNom === 'reduit' ? 'profil reduit' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
+  $('attrib-src').textContent = `· tuiles : ${etat.srcNom === 'data' ? 'profil contrat' : etat.srcNom === 'reduit' ? 'profil reduit' : etat.srcNom === 'reduit2' ? 'profil reduit2' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
   await creerCarte();
   jalon('carte_prete');
   surcouche.redimensionner();
@@ -478,13 +535,14 @@ async function demarrer() {
   brancherInterface();
   surTuile(() => { map.triggerRepaint(); majInfo(); surcouche.planifier(etatSurcouche()); });
   couchegl.surPremiere = () => { requestAnimationFrame(() => { jalon('premiere_couche_visible'); mesures.premiere_couche_ms = mesures.jalons.premiere_couche_visible; }); };
-  map.addLayer(couchegl, 'contours');
+  map.addLayer(couchegl, idPremiereCoucheHaute());
+  map.once('idle', () => { jalon('carte_complete_idle'); });
   majLegende();
   appliquer();
   attendreCharge().then(() => {
     jalon('tout_charge_ouverture');
     mesures.ouverture = { octets: stats.octetsDonnees, requetes: stats.requetesDonnees, tuiles_chargees: stats.tuilesChargees,
-      tuiles_absentes: stats.tuilesAbsentes, tuiles_dessinees: couchegl.derniere.tuiles };
+      tuiles_absentes: stats.tuilesAbsentes, tuiles_dessinees: couchegl.derniere.tuiles, fond: { ...stats.fond } };
     etat.pretOuverture = true; stats.phase = 'precharge'; if (!BENCH) appliquer(); });
   if (BENCH) banc();
 }

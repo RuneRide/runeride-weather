@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Pilote minimal de Chrome sans interface via le protocole CDP (aucune dépendance : Node >= 22).
 // Usage : node viewer/tools/pilote_chrome.mjs scenario.json
-// scenario.json : { "url": "...", "largeur": 1280, "hauteur": 800, "dpr": 1, "etapes": [
+// scenario.json (option "reseau": "fichier.json" : octets réellement transférés par URL, via CDP Network) : { "url": "...", "largeur": 1280, "hauteur": 800, "dpr": 1, "etapes": [
 //    {"eval": "expression JS (promesse attendue)"}, {"capture": "chemin.png"},
 //    {"attendre_dom": "#mesures[data-pret]", "ms": 60000}, {"dom": "#mesures", "vers": "fichier.txt"}, {"pause": 500} ] }
 // Chrome sans interface utilise un WebGL LOGICIEL (SwiftShader) : les images/s mesurées ne
@@ -34,10 +34,12 @@ try {
   const cibles = await (await fetch(`http://127.0.0.1:${p}/json`)).json();
   const ws = new WebSocket(cibles.find(c => c.type === 'page').webSocketDebuggerUrl);
   await new Promise(r => ws.addEventListener('open', r));
-  let n = 0; const att = new Map(); const logs = [];
+  let n = 0; const att = new Map(); const logs = []; const urls = new Map(); const reseau = [];
   ws.addEventListener('message', ev => {
     const m = JSON.parse(ev.data);
     if (m.id && att.has(m.id)) { att.get(m.id)(m); att.delete(m.id); }
+    else if (m.method === 'Network.responseReceived') urls.set(m.params.requestId, { url: m.params.response.url, status: m.params.response.status });
+    else if (m.method === 'Network.loadingFinished') { const u = urls.get(m.params.requestId); if (u) reseau.push({ ...u, octets: m.params.encodedDataLength, t: m.params.timestamp }); }
     else if (m.method === 'Runtime.consoleAPICalled') logs.push(m.params.type + ': ' + m.params.args.map(a => a.value ?? a.description).join(' '));
     else if (m.method === 'Runtime.exceptionThrown') logs.push('EXCEPTION: ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text));
   });
@@ -45,7 +47,7 @@ try {
     const id = ++n; att.set(id, m => m.error ? rej(new Error(method + ' : ' + m.error.message)) : res(m.result));
     ws.send(JSON.stringify({ id, method, params }));
   });
-  await cdp('Runtime.enable'); await cdp('Page.enable');
+  await cdp('Runtime.enable'); await cdp('Page.enable'); await cdp('Network.enable');
   await cdp('Emulation.setDeviceMetricsOverride', { width: sc.largeur || 1280, height: sc.hauteur || 800,
     deviceScaleFactor: sc.dpr || 1, mobile: !!sc.mobile });
   if (sc.mobile) await cdp('Emulation.setTouchEmulationEnabled', { enabled: true });
@@ -73,6 +75,7 @@ try {
       writeFileSync(e.capture, Buffer.from(r.data, 'base64')); console.log('capture', e.capture);
     }
   }
+  if (sc.reseau) writeFileSync(sc.reseau, JSON.stringify(reseau));
   if (logs.length) console.log('--- console ---\n' + logs.slice(0, 40).join('\n'));
   ws.close();
 } catch (err) {

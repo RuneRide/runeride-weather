@@ -72,3 +72,4 @@ h1 small { font-weight: 400; color: var(--discret); font-size: 12px; margin-left
 
 /* ?ui=0 : carte seule (captures comparatives) */
 .sans-ui #haut, .sans-ui #info, .sans-ui #legende, .sans-ui #bas { display: none; }
+#attrib a { color: inherit; }

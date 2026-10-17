@@ -142,3 +142,51 @@ Soit 1 568 à 1 722 requêtes (bureau) et 329 à 336 (mobile) par couche. **ESTI
 ### 8.6 Rejouer
 
 `python3 viewer/serve.py` ; `python3 viewer/tools/comparer_profils.py scenario DOSSIER`, puis `node viewer/tools/pilote_chrome.mjs DOSSIER/scenario-<profil>.json` pour chacun, puis `python3 viewer/tools/comparer_profils.py analyse DOSSIER`. Octets : `?bench=1&profil=…` et `__app.mesurerFrise('vent')`. Décodage : `__app.comparer(points)` (voir §8.2).
+
+## 9. Fond de carte et `reduit2`
+
+### 9.1 Ce qui a été fait
+
+- **Fond de carte réel** : `out/basemap/domaine-z9.pmtiles` (Protomaps, OSM, zooms 0-9, monté sous `/basemap/` avec Range), style `basemaps.layers('protomaps', basemaps.namedFlavor(thème), { lang: 'fr' })` (`@protomaps/basemaps` 5.7.2, SRI), thème **sombre** par défaut, `?theme=clair` pour le clair, `?fond=0` pour un fond uni (mesures). Polices et sprites viennent de `protomaps.github.io/basemaps-assets` (dépendance réseau : voir points ouverts). Les contours Natural Earth sont supprimés : hors du domaine météo (trapèze vide), c'est le fond de carte vrai qui apparaît (terre, mer, villes, frontières), au lieu d'un aplat.
+- **Ordre des couches** : terre, occupation du sol, eau et rivières **sous** la couche météo (la météo se lit aussi sur la mer ; côtes et relief se devinent à travers) ; la couche WebGL est insérée avant la première couche `roads_*` (hors pistes d'aéroport), de sorte que **routes, frontières, libellés d'eau, places, points d'intérêt sont au-dessus** (`map.addLayer(couche, 'roads_tunnels_other_casing')`, repéré par expression régulière sur les identifiants). Opacité réglable `?opacite=` (0,85 par défaut).
+- **`reduit2`** : `?profil=reduit2` (monté sous `/data-reduit2`), **profil par défaut** ; tirage par défaut HD 03Z (52 échéances). `contrat` et `reduit` restent sélectionnables et ont été revérifiés.
+- Attribution : « Source : Météo-France, Licence Ouverte v2.0 · Protomaps © OpenStreetMap contributors (ODbL) ».
+
+### 9.2 Décodage `reduit2` (contre `pipeline/tiling/decode.py`)
+
+100 points par variable et par profil (tirage HD 03Z, échéance 30, z7). `t2m` : `min` 243,15, `quant_step` 0,25 ; `gust10` : 0 à 63,5, pas 0,25, 254 niveaux. **Écart maximal** : `reduit2` t2m 6·10⁻⁶, gust10 3,5·10⁻¹², vent wind8 4,6·10⁻⁷ ; `reduit` t2m 6·10⁻⁶ ; `contrat` t2m 1,5·10⁻⁵ ; toutes les autres variables ≤ 1,3·10⁻⁵ : égalité à l'arrondi `float32` près, aucun profil cassé.
+
+### 9.3 Alignement fond / météo (z8, z9, z10)
+
+Test géométrique **mesuré** sur tuiles synthétiques (disque sans donnée centré à 2°E 49°N, rayon 1,1° ; bord gauche attendu à 0,9°E sur la ligne 49°N) contre `map.project` (même projection que le fond) : écart **0 px à z7, −1 px à z8 et z9, −3 px à z10**, alors qu'un pixel de donnée (z8, plafond de la couche) mesure 2 px à z8, 4 px à z9, 8 px à z10 : l'écart reste **sous un demi-pixel de donnée**, ce qu'impose la règle « un voisin sans donnée donne pas de donnée ». À l'œil sur le bassin d'Arcachon et le littoral landais (t2m à 55 % d'opacité, zoom carte 8, 9,5 et 10,5), la teinte de la mer et de la terre suit la côte du fond, sans décalage visible ; **mais** le champ de température est trop lisse pour juger la côte au pixel, et le test de comparaison automatique sur la côte (maximum de gradient) s'est révélé trop bruité (il tombait sur d'autres structures) : le seul test fiable est celui du disque synthétique. Le surzoom de MapLibre au-delà de z9 n'a pas de défaut visible (les routes restent nettes jusqu'à z10,5 ; la météo est de toute façon un surzoom du z7 ou z8).
+
+### 9.4 Mesures à l'ouverture (vue France, vent, `reduit2`, Chrome sans interface, 2 exécutions par cas ; octets réellement transférés lus via CDP)
+
+| | Bureau 1280×800, avec fond | Bureau, sans fond | Mobile 390×844, avec fond | Mobile, sans fond |
+|---|---|---|---|---|
+| Données météo (Range) | 1,08 Mo, 57 requêtes | idem | 0,35 Mo, 15 requêtes | idem |
+| Fond PMTiles (Range) | **0,25 Mo**, 5 requêtes | 0 | **0,30 Mo**, 5 requêtes | 0 |
+| Polices et sprites (protomaps.github.io) | ≈ 0,46 Mo | 0 | ≈ 0,41 Mo | 0 |
+| Bibliothèques JS/CSS (MapLibre, pmtiles, basemaps) | 0,30 Mo | 0,30 Mo | 0,30 Mo | 0,30 Mo |
+| **Première couche visible** | 1,17 à 1,20 s | 0,72 à 0,73 s | 1,27 à 1,47 s | 0,61 à 0,63 s |
+| **Carte complète** (événement `idle`) | 1,37 à 1,38 s | 0,94 s | 1,43 à 1,51 s | 0,87 à 0,91 s |
+
+Le **fond pèse au total ≈ 0,7 Mo à l'ouverture** (tuiles vectorielles 0,25 à 0,30 Mo + polices et sprites 0,4 à 0,5 Mo), soit moins que la météo vent sur bureau ; objectif « ≤ 1,5 Mo de données » : données + tuiles du fond = 1,33 Mo (bureau) et 0,65 Mo (mobile) ; avec polices et sprites 1,8 Mo (bureau) et 1,1 Mo (mobile). Le fond retarde la première couche de **0,45 à 0,85 s** (en réseau local : MapLibre attend le style, la source et les polices ; sur 4G, ESTIMATION, les polices distantes seraient l'essentiel du surcoût). **Chrome sans interface : WebGL logiciel, rien à conclure sur les images par seconde** (non mesurées ici).
+
+### 9.5 Captures (`docs/poc-j1/img/`)
+
+`viz-fond-vent-france-sombre.png` / `-clair.png`, `viz-fond-temperature-france-sombre.png` / `-clair.png`, `viz-fond-vent-alpes-sombre.png` / `-clair.png`, `viz-fond-temperature-provence-sombre.png` / `-clair.png`, `viz-fond-mobile-temperature-sombre.png`.
+
+### 9.6 Lisibilité (constats)
+
+- **Fond sombre** : le fond sombre (terre gris foncé, mer bleu nuit) laisse bien ressortir les palettes vent et température ; les libellés (villes, régions) au-dessus de la météo restent lisibles en gris clair avec halo, y compris sur les zones saturées ; les routes (fines, sombres) et frontières sont discrètes mais discernables. Le vent faible (bleu sombre) se confond un peu avec la terre sombre en zoom Alpes : on perd le contraste entre vent presque nul et terre, mais le relief reste deviné à travers la couche.
+- **Fond clair** : les couleurs de la météo sont plus délavées par la transparence (0,85) sur la terre claire, mais restent lisibles ; la mer claire hors domaine ressort bien ; les libellés gris pâle à halo blanc ont un **contraste plus faible** sur les zones jaunes et vertes de la température (noms de villes et pays les moins marqués difficiles à lire à 1280 px) : un thème de libellés plus foncé serait utile pour le clair.
+- **Flèches** : toujours lisibles sur les deux fonds ; elles chevauchent parfois un libellé (Alpes), à surveiller.
+- **Hors domaine** : le trapèze météo vide laisse voir le fond de carte réel ; la limite du domaine est nette, sans cadre : on distingue qu'il n'y a pas de donnée, mais rien n'indique explicitement « hors domaine » (à ajouter, par exemple un voile).
+
+### 9.7 Écarts et points ouverts
+
+- Polices et sprites chargés depuis `protomaps.github.io` : à auto-héberger pour le hors-ligne (plan dans `fond-de-carte.md` §4, 35 fichiers, 2,7 Mo bruts).
+- `basemaps.js`, MapLibre et pmtiles viennent de jsDelivr (versions et SRI épinglées).
+- Pas de mesure sur un vrai téléphone ni en 4G ; l'alignement au pixel sur une côte réelle reste à vérifier avec un champ à bord net (par exemple une couche nuages ou pluie).
+- Les tuiles du fond s'arrêtent à z9 (surzoom au-delà) ; le zoom maximal de la carte est 10,5.

@@ -10,15 +10,17 @@ export const stats = {
   requetesTuiles: 0, tuilesChargees: 0, tuilesAbsentes: 0, ms: [],
   phase: 'ouverture', parPhase: {},
 };
-function compter(octets) {
+stats.fond = { requetes: 0, octets: 0 };   // fond de carte vectoriel (PMTiles Protomaps), compté à part
+function compter(octets, cat) {
+  if (cat === 'fond') { stats.fond.requetes++; stats.fond.octets += octets; return; }
   stats.requetesDonnees++; stats.octetsDonnees += octets;
   const p = (stats.parPhase[stats.phase] ||= { requetes: 0, octets: 0 });
   p.requetes++; p.octets += octets;
 }
 
 /** Source PMTiles qui compte les octets reçus par requête Range. */
-class SourceCompteuse {
-  constructor(url) { this.url = url; }
+export class SourceCompteuse {
+  constructor(url, cat = 'donnees') { this.url = url; this.cat = cat; }
   getKey() { return this.url; }
   async getBytes(offset, length, signal) {
     const rep = await fetch(this.url, { signal, headers: { Range: `bytes=${offset}-${offset + length - 1}` } });
@@ -26,7 +28,7 @@ class SourceCompteuse {
     const data = await rep.arrayBuffer();
     // 200 = le serveur a ignoré Range : on découpe (le coût réel est alors le fichier entier)
     const util = rep.status === 206 ? data : data.slice(offset, offset + length);
-    compter(data.byteLength);
+    compter(data.byteLength, this.cat);
     return { data: util, etag: rep.headers.get('ETag') || undefined };
   }
 }
