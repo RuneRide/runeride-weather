@@ -45,7 +45,7 @@ Identique pour les deux résolutions (**mesuré**) : latitude régulière 55,4°
 | 0,01° | 2801 × 1791 = 5,02 M | 20 Mo |
 
 Particularités qui piègent :
-- **Valeur manquante `9999`** avec bitmap : **17,1 %** des points sont masqués (coins hors du domaine réel du modèle, sur les deux résolutions). Sans traitement, les `9999` écrasent toute échelle de couleurs.
+- **Valeur manquante `9999`** avec bitmap : **17,1 %** des points sont masqués, sur les deux résolutions. Le domaine réel du modèle est un **trapèze** qui se rétrécit vers le sud (largeur valide mesurée : 27,7° à 54°N, 25,5° à 50°N, 23,6° à 46°N, 22,0° à 42°N, 20,7° à 38,5°N), pas le rectangle de la grille. Sans traitement, les `9999` écrasent toute échelle de couleurs.
 - **Compression CCSDS** (`grid_ccsds`) : il faut une bibliothèque GRIB avec `libaec` (eccodes 2.50 l'a décodée sans configuration).
 - **Cumuls depuis H0** : précipitations, rayonnements, flux sont des cumuls (`accum`) à dé-cumuler pour obtenir des valeurs horaires. Rafales, min/max de température : extrema sur la période de l'échéance (`max`/`min`).
 - Fichiers 0,025° : un fichier contient un groupe d'échéances consécutives (le premier, 00H06H, en contient **7** : 0 à 6 ; les suivants 6 : 07H12H = 7 à 12, etc. ; le dernier, 49H51H, 3). Il n'y a pas de recouvrement entre groupes.

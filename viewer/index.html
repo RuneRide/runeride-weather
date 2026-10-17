@@ -1,0 +1,53 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: EUPL-1.2 -->
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#17191C">
+  <title>Les Augures · RuneRide Météo (PoC J1)</title>
+  <!-- Versions épinglées (jsDelivr) avec empreinte SRI -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css"
+        integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="carte" aria-label="Carte météo"></div>
+  <canvas id="surcouche" aria-hidden="true"></canvas>
+
+  <header id="haut">
+    <h1>Les Augures <small>PoC J1 · <span id="modele">AROME HD</span></small></h1>
+    <nav id="couches" aria-label="Couche affichée"></nav>
+  </header>
+
+  <aside id="info" aria-live="polite" hidden>
+    <button id="info-fermer" aria-label="Effacer le point">×</button>
+    <div id="info-valeur"></div>
+    <div id="info-detail"></div>
+  </aside>
+
+  <section id="legende" aria-label="Légende">
+    <div id="leg-titre"></div>
+    <canvas id="leg-barre" width="256" height="1"></canvas>
+    <div id="leg-ticks"></div>
+  </section>
+
+  <footer id="bas">
+    <div id="temps-ligne">
+      <button id="lecture" aria-label="Lecture" title="Lecture / pause (espace)">▶</button>
+      <button id="vitesse" aria-label="Vitesse d'animation" title="Vitesse">×1</button>
+      <div id="heure"><b id="heure-locale">--</b><span id="heure-detail"></span></div>
+    </div>
+    <input id="frise" type="range" min="0" max="1" step="0.01" value="0" aria-label="Échéance">
+    <div id="attrib">Source : Météo-France, Licence Ouverte v2.0 <span id="attrib-src"></span> · fond Natural Earth · MapLibre</div>
+  </footer>
+
+  <pre id="mesures" hidden></pre>
+
+  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"
+          integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"
+          integrity="sha384-pbKNZbDshUsLnZMIVsn/t+j3xEY9PGfuX5Z22l5rcy/obXz3EwaMx1F5d9sRsJMn" crossorigin="anonymous"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

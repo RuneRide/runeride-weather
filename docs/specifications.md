@@ -101,7 +101,7 @@ Météo-France (S3 public, GRIB2, 8 tirages/jour)
 - **Bordure de 1 px recouvrante** entre tuiles pour éviter les coutures de l'interpolation bilinéaire (DÉCISION à valider au PoC).
 - Charge utile : **WebP sans perte** (ou PNG), valeurs quantifiées en canaux de couleur, **sans canal alpha de données** (la pré-multiplication du navigateur corromprait les valeurs) ; décodage avec `premultiplyAlpha: 'none'`.
 - **Code 0 réservé = « pas de donnée »** (points masqués) ; la plage utile est codée de 1 à 255 (8 bits) ou 1 à 65 535 (16 bits).
-- Mesuré : température 8 bits en pleine grille HD = 0,62 Mo en WebP sans perte ; vent u/v sur 4 canaux 16 bits = 8,4 Mo en PNG avant masquage, ce qui est trop lourd : d'où le codage 24 bits (RVB) du §5.2, à re-mesurer. **ESTIMATION** d'un fichier PMTiles HD par variable et échéance : 1 à 3 Mo ; par tirage (7 variables × 52 échéances) : environ 1 à 1,5 Go ; AROME : environ 0,2 Go ; trois tirages conservés : **~4 à 5 Go**. À mesurer au PoC J1.
+- Mesuré : température 8 bits en pleine grille HD = 0,62 Mo en WebP sans perte ; vent u/v sur 4 canaux 16 bits = 8,4 Mo en PNG avant masquage, ce qui est trop lourd : d'où le codage 24 bits (RVB) du §5.2, à re-mesurer. **Mesuré au PoC J1** (échéances 0 à 6, WebP sans perte) : ≈ **41 Mo par échéance en HD** (7 variables, dont le vent pour 19 Mo, soit 46 %) et ≈ **14 Mo en AROME** ; **ESTIMATION** pour un tirage de 52 échéances : **≈ 2,1 Go en HD et ≈ 0,7 Go en AROME**, donc ≈ 8,4 Go pour 3 tirages (plus que l'estimation initiale de 4 à 5 Go ; les échéances lointaines peuvent peser davantage). Poids du vent à arbitrer. Détails : [poc-j1/synthese.md](poc-j1/synthese.md).
 
 ### 5.2 Quantification
 
@@ -242,7 +242,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | Disponibilité | interface statique ; en cas d'échec d'un tirage, le précédent reste servi | DÉCISION |
 | Reprise sur erreur | téléchargements repris, somme de contrôle de taille, nouvel essai, alerte si aucun nouveau tirage depuis 6 h | DÉCISION |
 | Coût | ordre de grandeur de quelques euros à quelques dizaines d'euros par mois, dominé par la diffusion ; à chiffrer au jalon J5 | ESTIMATION |
-| Stockage | ~4 à 5 Go pour 3 tirages (§5.1) | ESTIMATION |
+| Stockage | ~8 à 9 Go pour 3 tirages (§5.1, mesuré sur 7 échéances puis extrapolé) | ESTIMATION |
 | Calcul | décodage 0,43 s pour 6 champs HD (mesuré) ; un tirage complet en 15 à 25 min sur 1 cœur, quelques minutes en parallèle | ESTIMATION |
 | Vie privée | position et trace ne servent qu'à répondre ; aucun traceur, aucune mesure d'audience tierce ; journaux sans coordonnées précises | DÉCISION |
 | **Service public : maîtrise du coût** | budget AWS avec alarmes et plafond, cache CDN long sur les tuiles (immuables par tirage), diffusion en `Range`, limitation de débit sur l'API point / itinéraire, quota de requêtes par IP | DÉCISION |
@@ -263,8 +263,8 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 |---|---|---|
 | **J0** | Valider ce document et les décisions D1 à D9 | décisions tranchées, noms de domaines figés |
 | **J1b** AROME-PI | **fait** : source = API Météo-France (WCS), licence ouverte, compte gratuit et jeton requis ; reste à créer le compte et à inventorier les paramètres avec un jeton | compte créé par le titulaire, jeton dans Secrets Manager, `GetCapabilities` lu, paramètres et volumes reportés dans `donnees-arome.md` |
-| **J1** PoC données | un tirage AROME + HD : téléchargement, décodage, masque, dé-cumul, tuilage de vent, température, pluie | valeurs identiques à eccodes en 20 points de contrôle (écart ≤ pas de quantification) ; poids et temps mesurés et reportés ici |
-| **J2** PoC visualisation | MapLibre + couche couleur + frise interpolée sur un appareil réel | 30 images/s en animation, première couche < 2,5 s en 4G |
+| **J1** PoC données (**fait le 17/10** : 20 points contrôlés à moins d'un demi-pas, voir [poc-j1/synthese.md](poc-j1/synthese.md)) | un tirage AROME + HD : téléchargement, décodage, masque, dé-cumul, tuilage de vent, température, pluie | valeurs identiques à eccodes en 20 points de contrôle (écart ≤ pas de quantification) ; poids et temps mesurés et reportés ici |
+| **J2** PoC visualisation (**prototype fait**, mesures sur appareil réel à faire) | MapLibre + couche couleur + frise interpolée sur un appareil réel | 30 images/s en animation, première couche < 2,5 s en 4G ; mesuré en WebGL logiciel : première couche 0,9 à 1,1 s, 0,91 Mo à l'ouverture sur mobile (3,41 Mo sur grand écran) |
 | **J3** Vent et modèles | particules, rafales, bascule AROME / HD, isobares vectorielles, vent en altitude (option) | bascule invisible, pas de couture entre tuiles, particules adaptatives |
 | **J4** Point | météogramme, séries, API `/v1/point` | réponse en moins de 500 ms (ESTIMATION), valeurs égales à celles de la carte |
 | **J5** Production du pipeline | publication progressive, manifest, rétention, reprises, supervision, CloudFront, domaines | un tirage réel publié automatiquement, 7 jours sans intervention |
