@@ -14,7 +14,7 @@ Référence d'ergonomie : windy.com (carte plein écran, particules de vent anim
 
 **Inclus (v1)** : France métropolitaine et alentours (domaine AROME : 37,5–55,4°N, 12°O–16°E), prévisions de 0 à 51 h, couches vent, rafales, température, précipitations, nuages, pression, orages ; modèles AROME (0,025°) et AROME HD (0,01°) ; fiche de point (météogramme) ; météo le long d'un itinéraire ; **pluie très court terme (AROME-PI, voir réserve ci-dessous)** ; interface installable (PWA), utilisable au guidon ; **service public**, sans compte.
 
-**Réserve sur AROME-PI** : le wiki de Météo-France le présente comme open data (tirage horaire, 0 à 6 h par pas de 15 min), mais **aucun jeu AROME-PI n'a été trouvé** sur data.gouv.fr ni dans le stockage S3 qui héberge AROME et ARPEGE (`arome`, `arpege`, `phealth`, `vague-surcote`). Sa source, son format et son accès sont donc **à localiser avant de s'engager** (jalon J1b). Si elle exige une clé d'API ou n'est pas librement réutilisable, la pluie très court terme sort de la v1.
+**AROME-PI (J1b, résolu le 17/10/2026)** : servi par l'**API de Météo-France** (OGC WCS/WMS), pas par le stockage S3 ouvert ; **Licence Ouverte v2.0**, **compte gratuit et jeton OAuth2 requis**, 100 requêtes/min ; 0,01° et 0,025° ; tirage horaire, 0 à 6 h par pas de 15 min (wiki). Il faut donc que le titulaire du projet crée le compte et fournisse un jeton (stocké dans AWS Secrets Manager). **PIAF** (5 min) est écarté de la v1 : environnement « APIS commerciales » et licence non déclarée. Détails : [donnees-arome.md §11](donnees-arome.md).
 
 **Exclus (v1)** : radar et satellite (non fournis par AROME ; pistes en §11), vagues, qualité de l'air, visibilité (paramètre non identifié), alertes. **Aucune alerte de sécurité n'est émise par RuneRide** : on renvoie vers la Vigilance Météo-France. Hors domaine AROME, rien n'est affiché (voir §11 pour une prévision de repli).
 
@@ -262,7 +262,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | Jalon | Contenu | Critère d'acceptation |
 |---|---|---|
 | **J0** | Valider ce document et les décisions D1 à D9 | décisions tranchées, noms de domaines figés |
-| **J1b** AROME-PI | localiser la source (portail API, autre jeu), format, licence, délai, volume ; décider de son entrée en v1 | source identifiée, licence confirmée, mesures reportées dans `donnees-arome.md`, décision écrite |
+| **J1b** AROME-PI | **fait** : source = API Météo-France (WCS), licence ouverte, compte gratuit et jeton requis ; reste à créer le compte et à inventorier les paramètres avec un jeton | compte créé par le titulaire, jeton dans Secrets Manager, `GetCapabilities` lu, paramètres et volumes reportés dans `donnees-arome.md` |
 | **J1** PoC données | un tirage AROME + HD : téléchargement, décodage, masque, dé-cumul, tuilage de vent, température, pluie | valeurs identiques à eccodes en 20 points de contrôle (écart ≤ pas de quantification) ; poids et temps mesurés et reportés ici |
 | **J2** PoC visualisation | MapLibre + couche couleur + frise interpolée sur un appareil réel | 30 images/s en animation, première couche < 2,5 s en 4G |
 | **J3** Vent et modèles | particules, rafales, bascule AROME / HD, isobares vectorielles, vent en altitude (option) | bascule invisible, pas de couture entre tuiles, particules adaptatives |
@@ -270,7 +270,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | **J5** Production du pipeline | publication progressive, manifest, rétention, reprises, supervision, CloudFront, domaines | un tirage réel publié automatiquement, 7 jours sans intervention |
 | **J6** Itinéraire | `/v1/route`, vue le long du trajet, lien depuis l'application | résultat en moins de 2 s pour 500 points (ESTIMATION), aucune trace stockée |
 | **J7** Finitions | PWA hors-ligne, accessibilité, FR/EN, légal, **garde-fous du service public** (§8) | audit manuel clavier et lecteur d'écran, attribution et avertissement vérifiés, alarmes de coût actives |
-| **J8** Très court terme | couche pluie à 15 min depuis AROME-PI (si J1b est positif) | échéances de 15 min jusqu'à +6 h affichées sans saut avec la frise horaire |
+| **J8** Très court terme | couche pluie à 15 min depuis AROME-PI (via WCS, jeton requis) | échéances de 15 min jusqu'à +6 h affichées sans saut avec la frise horaire |
 | **J9** Europe (hors v1) | adaptateurs ARPEGE puis ICON-D2, contrat de variables, manifest multi-modèles, attributions dynamiques | un point à Munich et un à Lyon servis par le bon modèle, coutures documentées |
 
 **Tests** : jeux de fichiers GRIB réduits pour les tests unitaires (décodage, masque, dé-cumul, conversions, quantification aller-retour avec erreur maximale chiffrée) ; test de bout en bout du pipeline sur un tirage réel ; captures d'écran de référence pour la visualisation ; mesures de performance sur deux appareils ; surveillance de la fraîcheur.
@@ -286,7 +286,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | R5 | Tuiles | coutures et artefacts d'interpolation | bordure d'1 px, tests visuels |
 | R6 | Coût | diffusion supérieure aux estimations | CDN avec cache fort, compression, plafonds de budget |
 | R7 | Légal | réutilisation des tuiles dérivées et attribution | relecture de la licence, mention systématique |
-| R9 | AROME-PI | source ouverte non identifiée | jalon J1b avant tout engagement ; sinon la pluie très court terme sort de la v1 |
+| R9 | AROME-PI | dépend d'un compte et d'un jeton, limite de 100 requêtes/min, catalogue lisible seulement avec le jeton ; PIAF probablement non réutilisable | créer le compte avant J8 ; mesurer le nombre de requêtes par tirage ; PIAF hors v1 |
 | R10 | Multi-modèles | licences et formats hétérogènes, coutures visibles | priorité fixe, attribution dynamique, un adaptateur isolé par source (voir couverture-europe.md) |
 | R8 | Positionnement | un tiers pourrait croire à une alerte officielle | avertissements, aucun vocabulaire d'alerte |
 | O1 | Public | ~~service réservé à l'application ?~~ **Tranché le 17/10/2026 : service public**, sans compte | garde-fous du §8 |
@@ -310,3 +310,4 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | D9 | Rétention de 3 tirages | oui |
 | D10 | Architecture multi-modèles : adaptateur par source, contrat de variables canoniques, manifest par modèle (v1 : AROME et HD seulement, mais le contrat est écrit dès le départ) | oui |
 | D11 | Couche de base Europe : ARPEGE 0,1° en premier, puis ICON-D2, hors v1 | oui |
+| D12 | Très court terme : AROME-PI via l'API WCS de Météo-France, jeton dans Secrets Manager ; PIAF exclu tant que sa licence n'est pas confirmée | oui, après création du compte |

@@ -145,3 +145,24 @@ PYTHONPATH=./pylib python3 tools/lsgrib.py "arome__001__SP1__03H__*.grib2"
 ```
 
 Les tirages des 17/10 (00, 03, 06, 12, 18 UTC) et du 16/10 (12, 18 UTC) ont servi aux mesures de délai et de volume.
+
+## 11. AROME-PI et PIAF (jalon J1b, vérifié le 17/10/2026)
+
+**Ces deux produits ne sont pas sur le stockage S3 ouvert** (qui ne contient que `arome`, `arpege`, `phealth` et `vague-surcote`) : ils sont servis par des **API** du portail de Météo-France (`portail-api.meteofrance.fr`), déclarées comme « services de données » sur data.gouv.fr.
+
+| | AROME-PI (« API Modèle AROME Prévision Immédiate ») | PIAF (« Prévision Immédiate Agrégée Fusionnée ») |
+|---|---|---|
+| Contenu | modèle AROME à très courte échéance : analyse et prévision, paramètres, échéances et domaines **paramétrables** | précipitations probabilistes, J-4 à T+3 h, **toutes les 5 min** |
+| Licence déclarée | **Licence Ouverte v2.0** | **aucune indiquée** |
+| Accès déclaré | `open_with_account` : **compte gratuit** nécessaire | `open_with_account`, mais publié dans l'environnement **« APIS commerciales »** |
+| Limite | **100 requêtes/min**, disponibilité annoncée 99,9 % | idem |
+| Interface | **OGC WMS** (images) et **OGC WCS** (champs par sous-ensemble, `GetCoverage`), couches `MF-NWP-HIGHRES-AROMEPI-001-FRANCE` (0,01°) et `…-0025-FRANCE` (0,025°) ; OAuth2 | non lue |
+| Authentification | **mesuré : HTTP 401 sans jeton** (la description OpenAPI, elle, est publique) | — |
+
+Cadence et pas lus sur le wiki (non testés faute de jeton) : AROME-PI **24 tirages par jour** (toutes les heures, disponible 30 min après), **échéances 0 à 360 min par pas de 15 min** ; PIAF 5 à 195 min par pas de 5 min.
+
+**Conclusion J1b :**
+- **AROME-PI est utilisable** : licence ouverte, interface standard, 0,01° disponible. Il faut un **compte et un jeton** sur le portail de Météo-France, créés par le titulaire du projet (je ne crée pas de compte). Le jeton serait stocké dans AWS Secrets Manager, jamais dans le dépôt.
+- Le catalogue des paramètres d'AROME-PI n'est lisible qu'avec un jeton : à inventorier au premier appel (`GetCapabilities`).
+- **PIAF est écarté de la v1** : son environnement « commerciales » et l'absence de licence déclarée laissent penser qu'il n'est pas librement réutilisable ; à réexaminer seulement après confirmation écrite de Météo-France.
+- Contrainte à dimensionner : 24 tirages par jour × une vingtaine d'échéances × le nombre de paramètres, à 100 requêtes/min. ESTIMATION : tenable pour une dizaine de paramètres, à mesurer.
