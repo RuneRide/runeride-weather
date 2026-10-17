@@ -44,16 +44,19 @@ class TileFile:
 
         Une tuile absente du fichier est entièrement « pas de donnée » (NaN).
         """
-        n = self.tile + 2 * self.border
+        n = self.tile + 2 * self.border      # tuile absente : taille nominale du fichier
         data = self.raw(z, x, y)
         if data is None:
             nan = np.full((n, n), np.nan, np.float32)
-            return (nan, nan.copy()) if self.encoding == "wind12" else nan
+            return (nan, nan.copy()) if self.encoding in ("wind12", "wind8") else nan
         img = E.from_image(data)
+        # la taille réelle (256 ou 258) fait foi : un profil peut supprimer la bordure à haut zoom
         if self.encoding == "wind12":
             return E.decode_wind12(img)
+        if self.encoding == "wind8":
+            return E.decode_wind8(img, float(self.meta["max"]))
         gray = img if img.ndim == 2 else img[..., 0]
-        return E.decode_scalar8(gray, self.variable)
+        return E.decode_scalar8(gray, self.variable, int(self.meta.get("levels", E.LEVELS)))
 
     def sample(self, lon, lat, z):
         """Valeur au point (lon, lat) par bilinéaire sur la texture de la tuile (comme le client).
@@ -66,17 +69,21 @@ class TileFile:
         gy = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
         x, y = int(gx // self.tile), int(gy // self.tile)
         px, py = gx - x * self.tile, gy - y * self.tile          # bord de pixel, 0..256
-        fi, fj = px + self.border - 0.5, py + self.border - 0.5   # indice continu dans le tableau
+        fields = self.read(z, x, y)
+        comps = fields if self.encoding in ("wind12", "wind8") else (fields,)
+        b = (comps[0].shape[0] - self.tile) // 2    # bordure réelle de cette tuile (0 ou 1)
+        fi, fj = px + b - 0.5, py + b - 0.5       # indice continu dans le tableau
         i0, j0 = int(math.floor(fi)), int(math.floor(fj))
         wx, wy = fi - i0, fj - j0
-        fields = self.read(z, x, y)
-        comps = fields if self.encoding == "wind12" else (fields,)
         res = []
         for a in comps:
-            sub = a[j0:j0 + 2, i0:i0 + 2].astype(np.float64)
+            h = a.shape[0]
+            ii = np.clip([i0, i0 + 1], 0, h - 1)     # sans bordure : bord répété (clamp), comme WebGL
+            jj = np.clip([j0, j0 + 1], 0, h - 1)
+            sub = a[np.ix_(jj, ii)].astype(np.float64)
             v = (sub[0, 0] * (1 - wx) + sub[0, 1] * wx) * (1 - wy) + (sub[1, 0] * (1 - wx) + sub[1, 1] * wx) * wy
             res.append(float(v))
-        return tuple(res) if self.encoding == "wind12" else res[0]
+        return tuple(res) if self.encoding in ("wind12", "wind8") else res[0]
 
 
 def read_tile(path, z, x, y):

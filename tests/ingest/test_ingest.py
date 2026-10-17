@@ -173,6 +173,105 @@ class TestNebulosite(unittest.TestCase):
         self.assertGreater(float(canon.construire("arome-hd", 0, champs, None, bornes=False)["rh2m"].max()), 100.0)
 
 
+DONNEES = os.path.join(RACINE, "tests", "ingest", "data")
+
+
+def _champs(d, n):
+    return {k: d[f"{k}_{n}"] for k in ("tirf", "tsnowp", "tgrp", "tp")}
+
+
+class TestRaccordGroupes025(unittest.TestCase):
+    """Extrait réel (Alpes du Nord, AROME 0,025°) autour du raccord 6 -> 7 (groupes 00H06H et 07H12H)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = np.load(os.path.join(DONNEES, "raccord_025.npz"))
+
+    def test_debit_a_7_exact_avec_cumul_du_groupe_precedent(self):
+        d = self.d
+        out = canon.construire("arome", 7, _champs(d, 7), _champs(d, 6))
+        self.assertTrue(np.array_equal(out["precip_rate"], d["attendu_precip_rate_7"], equal_nan=True))
+        self.assertTrue(np.array_equal(out["snow_fraction"], d["attendu_snow_fraction_7"], equal_nan=True))
+        self.assertGreater(float(np.nanmax(out["precip_rate"])), 1.0)   # l'extrait contient de la vraie pluie
+
+    def test_continuite_du_debit_au_raccord(self):
+        d = self.d
+        m = {n: float(np.nanmean(canon.construire("arome", n, _champs(d, n), _champs(d, n - 1))["precip_rate"])) for n in (5, 6, 7, 8)}
+        self.assertLess(m[7], 3 * max(m[6], m[8]))
+        self.assertGreater(m[7], min(m[6], m[8]) / 3)
+        # contre-épreuve : si l'on oubliait le cumul précédent, le débit à 7 serait le cumul entier depuis 0
+        oublie = canon.construire("arome", 7, _champs(d, 7), None)
+        self.assertNotIn("precip_rate", oublie)
+        entier = d["tirf_7"] + d["tsnowp_7"] + d["tgrp_7"]
+        ecart = float(np.nanmax(np.abs(entier - d["attendu_precip_rate_7"])))
+        self.assertGreater(ecart, 1.0)    # le cumul depuis 0 ne se confond pas avec le débit
+
+    def test_somme_des_debits_egale_cumul(self):
+        d = self.d
+        somme = sum(canon.construire("arome", n, _champs(d, n), _champs(d, n - 1) if n > 1 else None)["precip_rate"].astype(np.float64)
+                    for n in range(1, 9))
+        total = (d["tirf_8"] + d["tsnowp_8"] + d["tgrp_8"]).astype(np.float64)
+        self.assertLess(float(np.nanmax(np.abs(somme - total))), 0.01)    # écart = plancher à 0 des décréments de codage
+
+    def test_tp_recoupe_la_somme(self):
+        d = self.d
+        r = canon.construire("arome", 7, _champs(d, 7), _champs(d, 6))["precip_rate"]
+        r_tp = canon.debit_precip(d["tp_7"], d["tp_6"])
+        self.assertLess(float(np.nanmax(np.abs(r - r_tp))), 0.005)
+
+    def test_dernier_groupe_49H51H(self):
+        run = "2026-10-17T06:00:00Z"
+        self.assertEqual({lab for _, lab in download.fichiers_requis("arome", [49, 50, 51], run)}, {"43H48H", "49H51H"})
+        self.assertEqual({lab for _, lab in download.fichiers_requis("arome", [50, 51], run)}, {"49H51H"})
+        self.assertEqual(download.bornes_groupe("49H51H"), (49, 51))
+        for n in (7, 13, 19, 25, 31, 37, 43, 49):    # chaque raccord charge le groupe précédent
+            labs = {lab for _, lab in download.fichiers_requis("arome", [n], run)}
+            self.assertEqual(len(labs), 2, n)
+
+
+class TestNeigeReelle(unittest.TestCase):
+    """Extrait réel (Alpes du Nord, échéances 17-21, neige à haute altitude) pour snow_fraction."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = np.load(os.path.join(DONNEES, "neige_025.npz"))
+
+    def _sortie(self, n):
+        return canon.construire("arome", n, _champs(self.d, n), _champs(self.d, n - 1))
+
+    def test_reproduit_les_valeurs_attendues(self):
+        for n in range(18, 22):
+            out = self._sortie(n)
+            self.assertTrue(np.array_equal(out["snow_fraction"], self.d[f"attendu_snow_fraction_{n}"], equal_nan=True))
+            self.assertTrue(np.array_equal(out["precip_rate"], self.d[f"attendu_precip_rate_{n}"], equal_nan=True))
+
+    def test_pas_nulle_partout_et_dans_0_1(self):
+        for n in range(18, 22):
+            sf = self._sortie(n)["snow_fraction"]
+            self.assertGreater(float(np.nanmax(sf)), 0.9)
+            self.assertGreater(int((sf > 0.5).sum()), 10)
+            self.assertGreaterEqual(float(np.nanmin(sf)), 0.0)
+            self.assertLessEqual(float(np.nanmax(sf)), 1.0)
+
+    def test_neige_seulement_par_temperature_basse(self):
+        for n in range(18, 22):
+            out = self._sortie(n)
+            neige = (out["snow_fraction"] > 0.5) & (out["precip_rate"] > 0.05)
+            self.assertTrue(neige.any())
+            self.assertLess(float(np.nanmax(self.d[f"t2m_{n}"][neige] - 273.15)), 2.0)
+
+    def test_zero_la_ou_il_ne_precipite_pas(self):
+        out = self._sortie(20)
+        sec = out["precip_rate"] <= 0.05
+        self.assertTrue(np.all(out["snow_fraction"][sec] == 0.0))
+
+    def test_borne_0_1_malgre_decrements_de_codage(self):
+        a = lambda x: np.array([[x]], dtype=f32)
+        # Δneige > Δtotal (cumuls arrondis différemment) et Δneige < 0
+        self.assertEqual(float(canon.fraction_neige(a(1.2), a(1.0))[0, 0]), 1.0)
+        self.assertEqual(float(canon.fraction_neige(a(-0.001), a(1.0))[0, 0]), 0.0)
+
+
 @unittest.skipIf(eccodes is None, "eccodes indisponible")
 class TestGribSynthetique(unittest.TestCase):
     """Fabrique un mini GRIB2 (grille 4 × 3, longitudes 359,9..0,2, un point manquant) et le relit."""

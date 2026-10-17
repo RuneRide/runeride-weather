@@ -8,6 +8,7 @@ import time
 import numpy as np
 
 from . import encode as E
+from . import profiles as P
 from .mercator import Grid, pixel_lonlat, tiles_covering
 
 ZOOMS = {"arome-hd": (5, 8), "arome": (3, 7)}
@@ -15,21 +16,38 @@ ZOOMS = {"arome-hd": (5, 8), "arome": (3, 7)}
 _G = {}   # état partagé avec les processus fils (fork)
 
 
+def _border(prof, z):
+    return 0 if z >= prof.no_border_from else E.BORDER
+
+
+def _zmax(prof, var, default):
+    return min(prof.zmax.get(var, default), default)
+
+
 def _tile_worker(job):
     z, x, y = job
-    grid, fields = _G["grid"], _G["fields"]
-    lon, lat = pixel_lonlat(z, x, y)
+    grid, fields, prof = _G["grid"], _G["fields"], _G["profil"]
+    b = _border(prof, z)
+    lon, lat = pixel_lonlat(z, x, y, border=b)
     out = {}
     for var in _G["variables"]:
+        if z > _G["zmax"][var]:
+            continue
+        q = None
         if var == E.WIND_VARIABLE:
             u = grid.sample(fields["wind10_u"], lon, lat)
             v = grid.sample(fields["wind10_v"], lon, lat)
-            arr = E.encode_wind12(u, v)
+            if prof.wind_mode == "wind8":
+                arr = E.encode_wind8(u, v, prof.wind_vmax)
+            else:
+                arr = E.encode_wind12(u, v, prof.wind_drop_bits)
         else:
-            arr = E.encode_scalar8(grid.sample(fields[var], lon, lat), var)
+            arr = E.encode_scalar8(grid.sample(fields[var], lon, lat), var, prof.levels.get(var, E.LEVELS))
+            if var in prof.lossy and (arr > 0).all():
+                q = prof.lossy[var]    # jamais sur une tuile contenant du « pas de donnée »
         if not arr.any():
             continue   # tuile entièrement « pas de donnée » : non écrite
-        out[var] = E.to_webp(arr)
+        out[var] = E.to_webp(arr, lossy_quality=q)
     return (z, x, y), out
 
 
@@ -42,15 +60,24 @@ def available_outputs(npz_keys, wanted=None):
     return outs
 
 
-def metadata_for(var, model, run, step, zmin, zmax):
-    if var == E.WIND_VARIABLE:
+def metadata_for(var, model, run, step, zmin, zmax, prof=P.CONTRAT):
+    if var == E.WIND_VARIABLE and prof.wind_mode == "wind8":
+        md = {"encoding": "wind8", "min": -prof.wind_vmax, "max": prof.wind_vmax,
+              "scale": "linear", "unit": "m/s", "components": ["wind10_u", "wind10_v"],
+              "quant_step": E.wind8_step(prof.wind_vmax)}
+    elif var == E.WIND_VARIABLE:
         md = {"encoding": "wind12", "min": E.WIND_RANGE[0], "max": E.WIND_RANGE[1],
               "scale": "linear", "unit": "m/s", "components": ["wind10_u", "wind10_v"],
-              "step": E.WIND_STEP}
+              "quant_step": E.WIND_STEP * 2 ** prof.wind_drop_bits}
     else:
         vmin, vmax, scale, unit = E.SCALAR8[var]
+        lv = prof.levels.get(var, E.LEVELS)
         md = {"encoding": "scalar8", "min": vmin, "max": vmax, "scale": scale,
-              "unit": unit, "step": E.scalar_step(var)}
+              "unit": unit, "quant_step": E.scalar_step(var, lv), "levels": lv}
+        if var in prof.lossy:
+            md["lossy_quality"] = prof.lossy[var]
+    md["profile"] = prof.nom
+    md["border_dropped_from_zoom"] = prof.no_border_from if prof.no_border_from < 99 else None
     md.update({"variable": var, "model": model, "run": run, "step": step,
                "border": E.BORDER, "tile_size": E.TILE, "stored_size": E.STORED,
                "format": "webp-lossless", "nodata_code": 0,
@@ -80,7 +107,7 @@ def write_pmtiles(path, tiles, md, bounds, zmin, zmax):
     os.replace(tmp, path)
 
 
-def build(canon_path, out_root, variables=None, zooms=None, workers=None):
+def build(canon_path, out_root, variables=None, zooms=None, workers=None, profil=None):
     """Tuile un .npz canonique ; renvoie la liste des mesures par fichier produit."""
     t0 = time.time()
     p = os.path.abspath(canon_path).split(os.sep)
@@ -95,12 +122,14 @@ def build(canon_path, out_root, variables=None, zooms=None, workers=None):
     model = meta.get("model") or p[-3]
     if model not in ZOOMS:
         model = p[-3] if p[-3] in ZOOMS else "arome-hd"
+    prof = profil or P.CONTRAT
     zmin, zmax = zooms or ZOOMS[model]
     grid = Grid(d["lat"], d["lon"])
     outs = available_outputs(set(d.files), variables)
     fields = {k: d[k] for k in d.files if k not in ("lat", "lon", "meta")}
     jobs = [(z, x, y) for z in range(zmin, zmax + 1) for x, y in tiles_covering(*grid.bounds, z)]
-    _G.update(grid=grid, fields=fields, variables=outs)
+    _G.update(grid=grid, fields=fields, variables=outs, profil=prof,
+              zmax={v: _zmax(prof, v, zmax) for v in outs})
     t1 = time.time()
     workers = workers or os.cpu_count() or 1
     if workers > 1:
@@ -112,12 +141,13 @@ def build(canon_path, out_root, variables=None, zooms=None, workers=None):
     report = []
     for var in outs:
         tiles = {k: o[var] for k, o in results if var in o}
+        vzmax = _G["zmax"][var]
         path = os.path.join(out_root, model, run, var, "%s.pmtiles" % step)
-        md = metadata_for(var, model, run, step, zmin, zmax)
-        write_pmtiles(path, tiles, md, grid.bounds, zmin, zmax)
-        per_zoom = {z: sum(1 for k in tiles if k[0] == z) for z in range(zmin, zmax + 1)}
+        md = metadata_for(var, model, run, step, zmin, vzmax, prof)
+        write_pmtiles(path, tiles, md, grid.bounds, zmin, vzmax)
+        per_zoom = {z: sum(1 for k in tiles if k[0] == z) for z in range(zmin, vzmax + 1)}
         report.append({"model": model, "run": run, "step": step, "variable": var, "path": path,
-                       "bytes": os.path.getsize(path), "tiles": len(tiles), "tiles_per_zoom": per_zoom,
+                       "bytes": os.path.getsize(path), "tiles": len(tiles), "profil": prof.nom, "tiles_per_zoom": per_zoom,
                        "bytes_tiles": sum(len(b) for b in tiles.values())})
     t3 = time.time()
     total = t3 - t0

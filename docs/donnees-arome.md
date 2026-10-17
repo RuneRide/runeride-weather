@@ -28,6 +28,8 @@ Annexe factuelle des spécifications. Tout ce qui est marqué **mesuré** a ét�
 | Fichiers par tirage complet | 0,01° : **208** (4 paquets × 52 échéances, un fichier par heure) ; 0,025° : **99** (11 paquets × 9 groupes de 6 h) | mesuré |
 | Délai de publication (premier fichier / dernier fichier après l'heure du tirage) | 00 UTC : +1,9 h / +2,8 h ; 03 UTC : +1,8 h / +2,6 h ; 12 UTC : +3,0 h / +4,0 h ; 18 UTC : +4,2 h / +5,1 h | mesuré sur 4 tirages |
 
+**Complétude par paquet (constat du 17/10 à 13:17 UTC, mesuré dans le listage S3) : un tirage peut être publié incomplet, paquet par paquet.** Pour AROME HD (0,01°) : les tirages du 16/10 (06 h, 18 h) et du 17/10 de 00 h et 03 h ont leurs 52 échéances pour SP1, SP2, SP3 et HP1 ; **le tirage de 06 h du 17/10 n'a que 19 échéances de SP1 (0 à 18 h) et celui de 09 h n'en a aucune, alors que SP2, SP3 et HP1 y sont complets**, 7 h après l'heure nominale. SP1 contient la température, l'humidité, le vent à 10 m et les rafales : c'est le paquet le plus important. La cause n'est pas connue (incident de publication ou retard propre à ce paquet).
+
 Conséquence : la publication d'un tirage s'étale sur **~1 h** et son délai varie de **~2 à ~5 h** selon l'heure. Un tirage n'est donc « utilisable » que 2 à 5 h après son heure nominale, et la fraîcheur affichée doit en tenir compte.
 
 Autres produits open data Météo-France, lus sur le wiki (non testés ici) :

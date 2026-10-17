@@ -232,3 +232,112 @@ Soit ≈ 60 Mo/s de GRIB compressé décodés, ≈ 75 millions de points/s (HD S
 6. **HD ≈ AROME interpolé** à 0,17 m/s près : examiner où HD apporte de l'information (relief, côtes) avant de généraliser le surcoût (6,3 Go contre 0,85 Go par tirage).
 7. Performance : parallélisation par échéance et compression `.npz` allégée, si besoin ; reprise après interruption d'un tirage entier non écrite.
 8. Un seul tirage a été exploité (aucune comparaison d'une situation à l'autre).
+
+## 7. Extension 0-51 h (étape 2 : données lointaines, raccords, neige)
+
+Mesuré le 17/10/2026 (13 h UTC). Rejouer : `python3 -m pipeline.ingest --model arome --run 2026-10-17T06:00:00Z --steps 0-51 --src <grib> out/grib --download --connexions 2 --out out/canon`, puis `python3 -m pipeline.ingest.extension --src <grib> out/grib --modeles arome` (options `--run`, `--echeances-max`). Les résultats complets sont dans `out/canon/extension_arome_06Z_0-51.json`, `extension_arome-hd_03Z_0-51.json`, `extension_arome-hd_06Z_0-18.json`.
+
+### 7.1 Ce qui a pu être produit
+
+| Modèle, tirage | Échéances produites | Remarque |
+|---|---|---|
+| AROME 0,025°, 06Z | **0 à 51** (52 fichiers, 9 groupes `00H06H` à `49H51H`) | complet |
+| AROME HD, 06Z | **0 à 18 seulement** | côté Météo-France, SP1 HD du tirage 06Z s'arrête à `18H` : les `19H`… `51H` répondent **404** (SP2 est complet, 52 fichiers). Constaté à 13:03 et 13:06 UTC, soit 7 h après le tirage ; le tirage 09Z avait alors 43 SP2 et **0** SP1. À revérifier plus tard. |
+| AROME HD, **03Z** (substitut) | **0 à 51** (52 fichiers) | tirage complet (SP1 et SP2 : 52 + 52), utilisé pour tester les échéances lointaines HD |
+
+**Écart à la mission** : le HD 0-51 n'est donc pas celui du tirage 06Z mais du tirage 03Z (même modèle, 3 h plus tôt). Les sorties 06Z 0-18 sont conservées. Les HD 06Z 19-51 restent à produire dès que SP1 sera publié (même commande avec `--steps 0-51`, les fichiers déjà présents ne sont pas retéléchargés).
+
+### 7.2 Mesures (deux connexions au plus)
+
+| Mesure | AROME 0,025° 06Z, 0-51 | AROME HD 03Z, 0-51 |
+|---|---|---|
+| Fichiers GRIB / volume | 18 (SP1+SP2 × 9 groupes) dont 16 téléchargés : 703 Mo (+ 107 Mo déjà présents) | 104 : **2 191 Mo**, tous téléchargés |
+| Téléchargement | 16 fichiers présents en moins d'une minute (durée **non chronométrée**, la commande a été interrompue par l'erreur 404 du HD) | **45,8 s** de temps réel, soit **47,9 Mo/s** au total, ≈ 24 Mo/s par connexion (somme des temps par fichier 90,6 s) ; débit très supérieur aux 5–11 Mo/s mesurés plus tôt, réseau variable |
+| Décodage | 18 fichiers, 844 Mo en **11,2 s** ; SP1 0,69–1,25 s (55 Mo, 66 messages), SP2 0,32–0,79 s (42 Mo, 30 messages), dernier groupe 0,35 / 0,17 s | 104 fichiers, 2 191 Mo en **38,9 s** ; SP1 0,38 s et SP2 0,37 s en moyenne par fichier |
+| Total, 52 échéances | **73,2 s** (1,0 à 3,2 s par échéance, moyenne 1,4 s ; l'échéance 7 prend 2,1 s car elle recharge le groupe précédent) | 325,6 s dont 45,8 s de téléchargement ; 4,6 à 5,7 s par échéance, 279,8 s au total (compression `.npz` comprise) |
+| Mémoire (pic RSS) | 1 094 Mo | 1 165 Mo |
+| Sorties `.npz` | 462 Mo (≈ 8,9 Mo par échéance) | 2 789 Mo (≈ 53,6 Mo par échéance) |
+
+### 7.3 Plages, NaN et anomalies sur les 52 échéances
+
+Aucune échéance absente, aucun trou. Pourcentage de NaN : **17,179 %** (AROME) et **17,065 %** (HD) sur toutes les variables et toutes les échéances (l'échéance 0 diffère de 0,0003 point au plus : moins de 3 points de grille ; non analysé). Plages (AROME 06Z, 52 échéances, `gust10`, `precip_rate`, `snow_fraction`, `cloud_total` sur 51) :
+
+| Variable | Min | Max | Échéance du max | Observation |
+|---|---|---|---|---|
+| `wind10_u` / `wind10_v` (m/s) | −24,2 / −25,4 | 20,1 / 15,3 | 37 / 39 | |
+| `gust10` (m/s) | 0,0015 | 36,8 | 39 | |
+| `t2m` (K) | 259,7 | 303,8 | 9 | −13,4 °C à +30,7 °C |
+| `rh2m` (%) | 7,3 | 100 | 1 | |
+| `precip_rate` (mm/h) | 0 | 180,2 | 36 | cumul max sur 51 h : **562 mm** |
+| `snow_fraction` | 0 | 1 | 15 | |
+| `cloud_total` (%) | 0,0087 | 100 | 1 | |
+| `cape` (J/kg) | 0 | 3 689 | 42 | |
+| `mslp` (Pa) | 100 789 | 103 966 | 4 | |
+
+HD 03Z (0-51) : vent −23,8 à 19,4 m/s, rafale max 35,4 m/s (éch. 42), `t2m` 257,5 à 304,1 K, `rh2m` 3,0 à 100 %, `precip_rate` max **219,9 mm/h** (éch. 43), cumul max 413 mm, `cape` max 3 735 J/kg ; HD 06Z 0-18 : mêmes ordres de grandeur (débit max 110 mm/h).
+
+Aucune variable ne sort de la plage physique testée (bornes larges dans `extension.py`), **sauf `snow_fraction`, corrigée pendant cette étape** : voir §7.5. Anomalies et points à examiner (aucun n'est établi comme une erreur) :
+
+1. **Débits extrêmes** : 180 mm/h (AROME, éch. 36, 39,43°N 2,08°E) et 220 mm/h (HD 03Z, éch. 43, 38,95°N 2,09°E), au large des Baléares ; cumul de 562 mm en 51 h. Valeurs très élevées, localisées sur des cellules en mer : orage méditerranéen plausible mais à confronter à une autre source.
+2. **Sauts locaux entre échéances successives** : vent jusqu'à 35,7 m/s (AROME, éch. 36 → 37, 39,2°N 2,3°E, mêmes Baléares, rafale 34 m/s) ; HD 34,7 m/s (éch. 42 → 43, 38,86°N 2,13°E) : même cellule orageuse. `t2m` : saut de **10,8 K** en 1 h (AROME, éch. 10 → 11, 39,65°N 7,8°O) et **12,2 K** (HD 03Z, éch. 12 → 13, 39,75°N 7,5°O), Portugal intérieur, bord ouest du domaine, en fin d'après-midi : présent dans les deux modèles, donc plutôt physique (refroidissement brutal), mais à vérifier. Le 99,9ᵉ centile du saut horaire de `t2m` est de 6,2 K, ce qui est élevé.
+3. `cape` : saut local de 3 258 J/kg d'une échéance à l'autre (éch. 42 → 43), cohérent avec la convection ci-dessus.
+4. Aucun saut de moyenne anormal aux raccords de groupes (voir §7.4) ; les moyennes de domaine évoluent de façon continue (plus grand saut de la moyenne de `t2m` : 0,90 K).
+
+### 7.4 Raccords entre groupes d'échéances 0,025° (données réelles)
+
+Le cumul de chaque groupe démarre bien à 0 (`startStep = 0`, contrôlé par `verifier_fenetre` pour les 18 fichiers), donc l'échéance 7 est un cumul 0 → 7 comme les autres : le débit exige seulement l'échéance 6 du groupe précédent, ce que fait le code (le groupe est rechargé : +1 s à chaque raccord).
+
+| Raccord n | Débit moyen n−1 / n / n+1 (mm/h) | n ÷ moyenne(n−1, n+1) | Débit moyen si le cumul précédent était oublié |
+|---|---|---|---|
+| 7 | 0,0597 / 0,0691 / 0,0781 | 1,00 | 0,397 |
+| 13 | 0,0980 / 0,0999 / 0,1001 | 1,01 | 0,954 |
+| 19 | 0,1156 / 0,1255 / 0,1345 | 1,00 | 1,615 |
+| 25 | 0,1555 / 0,1653 / 0,1707 | 1,01 | 2,505 |
+| 31 | 0,1705 / 0,1743 / 0,1766 | 1,00 | 3,539 |
+| 37 | 0,1686 / 0,1616 / 0,1566 | 0,99 | 4,582 |
+| 43 | 0,1544 / 0,1598 / 0,1590 | 1,02 | 5,507 |
+| 49 | 0,1419 / 0,1436 / 0,1335 | 1,04 | 6,402 |
+
+Continuité : le débit à n s'insère entre ses voisins à 4 % près ; l'erreur d'un oubli du cumul précédent serait de 6 à 45 fois la valeur. Le plus gros décrément de cumul à un raccord est −0,0156 mm (éch. 37), même ordre que les autres intervalles (§4b).
+
+- **Somme des débits contre cumul**, 0-51 h : écart maximal **0,0425 mm** et moyen 0,0044 mm pour un cumul maximal de 562 mm (AROME) ; HD 03Z : 0,082 mm et 0,0057 mm pour 413 mm. Cet écart vient uniquement du plancher à 0 des décréments de codage.
+- **Dernier groupe `49H51H`** : 3 échéances (49, 50, 51), 27,8 Mo (SP1) et 21,5 Mo (SP2) ; la chaîne le traite sans cas particulier (débit moyen 0,1436 / 0,1335 / 0,1387 mm/h).
+- **Recoupement `tp` (SP1) contre `tirf + tsnowp + tgrp`**, débit sur 51 échéances : corrélation ≥ 0,9999998 ; biais ≤ 3,7e-6 mm/h ; RMSE ≤ 6,9e-4 mm/h ; écart maximal **0,029 mm/h** ; les cumuls eux-mêmes diffèrent d'au plus 0,0156 mm. Le plancher à 0 appliqué séparément à chaque série explique les écarts. Les deux méthodes sont équivalentes ; `tirf + tsnowp + tgrp` reste la référence du contrat.
+
+### 7.5 Neige : cas réel et validation de `snow_fraction`
+
+**Le tirage actuel (06Z) contient de la neige significative** : aucune recherche dans les autres tirages n'a été nécessaire (aucun téléchargement hors du plan). Elle apparaît à partir de l'échéance 11 et culmine entre les échéances 17 et 36.
+
+- **Où** : Alpes du Nord et franco-suisses (45,8°N 6,9°E, massif du Mont-Blanc, mailles les plus enneigées ; Alpes suisses centrales vers 46,5-46,8°N 8-9°E), Pyrénées centrales (42,6°N 0,4°E, Hautes-Pyrénées / Aragon). Cumul `tsnowp` maximal à l'échéance 51 : **59,9 mm d'eau** (AROME) à 45,85°N 6,9°E ; HD 03Z : 56,1 mm au même endroit. Sur les points où `snow_fraction > 0,5` (51 échéances, débit > 0,05 mm/h) : 7 345 points-échéances en zone Alpes, 1 001 Pyrénées, 57 ailleurs (AROME).
+- **Valeurs** : `snow_fraction` va de 0 à 1 ; 0 point ≠ 0 aux échéances 1-10, puis 142 à 1 768 points ≠ 0 par échéance (AROME).
+
+**Problème trouvé et corrigé** : avant correction, `snow_fraction` valait −0,018 à **1,066** (hors du contrat 0..1) : Δ`tsnowp` peut être légèrement négatif ou supérieur à Δtotal (pas de codage des cumuls, §4b). `fraction_neige` borne maintenant le résultat à [0,1] (test ajouté). Aucune autre sortie n'a changé ; la reproduction de la fixture reste 9/9.
+
+**Cohérence avec la température** (AROME, 51 échéances, points où le débit > 0,05 mm/h ; `t2m` du modèle, donc à l'altitude du relief du modèle) :
+
+| T2m (°C) | Points | `snow_fraction` moyenne | Part avec fraction > 0,5 |
+|---|---|---|---|
+| ≤ −2 | 2 801 | 0,845 | 94,6 % |
+| −2 à 0 | 6 037 | 0,566 | 60,5 % |
+| 0 à 2 | 23 680 | 0,129 | 8,2 % |
+| 2 à 4 | 62 809 | 0,0066 | 0,25 % |
+| 4 à 6 | 173 122 | 0,00017 | 0,0006 % |
+| > 6 | 4 133 655 | 1e-6 | 0 |
+
+HD 03Z donne la même allure (≤ −2 °C : 89,8 % ; −2 à 0 : 46,2 % ; 0 à 2 : 6,2 % ; 2 à 4 : 0,19 % ; > 6 : 0). Sur l'extrait des tests (Alpes, échéances 18-21), tous les points avec fraction > 0,5 et débit > 0,05 mm/h ont `t2m` < 1,5 °C. **Ce qui colle** : la neige apparaît quasi exclusivement sous ~2 °C, croît vers le froid et se concentre sur les Alpes et les Pyrénées. **Ce qui ne colle pas entièrement** : entre −2 et 0 °C, 40 % des points précipitants (et 5 % sous −2 °C) ont une fraction < 0,5, soit pluie ou mélange à T2m négative (pluie surfondue, ou couche chaude en altitude : `snow_fraction` est une part du cumul, pas un test de température) ; et entre 0 et 2 °C une faible part est déjà de la neige. Je n'ai pas de donnée d'altitude réelle ni d'observation pour trancher : **non établi**.
+
+### 7.6 Tests ajoutés
+
+`tests/ingest/test_ingest.py` : 35 tests (dont 10 nouveaux de cette étape) passent ; fixtures légères réelles `tests/ingest/data/raccord_025.npz` (19 Ko) et `neige_025.npz` (107 Ko), recadrées sur les Alpes du Nord (41 × 61 points), fabriquées par `tests/ingest/make_fixtures.py`.
+
+- Raccord : débit à 7 identique bit à bit avec le cumul du groupe précédent, continuité aux échéances 5-8, contre-épreuve, somme des débits (écart < 0,01 mm), recoupement `tp`, groupes `49H51H` et raccords 7, 13… 49 (chaque raccord charge deux groupes).
+- Neige : valeurs attendues reproduites, fraction non nulle partout et dans [0,1], neige seulement sous 2 °C, zéro sans précipitation, bornage.
+- Correctif annexe de sécurité : `localiser` n'accepte plus un fichier sans suffixe de tirage (échantillons `hd3/`) que si l'en-tête GRIB confirme le tirage. Le premier essai HD 03Z avait pris par erreur des échantillons du tirage 06Z ; la vérification de taille l'a arrêté avant toute sortie fausse.
+
+### 7.7 Points ouverts
+
+1. HD 06Z échéances 19-51 : SP1 non publié sur le S3 au moment de la mesure (404). À rejouer.
+2. Débits extrêmes et sauts de `t2m` du Portugal (§7.3) non confrontés à une autre source.
+3. Écart `tirf + tsnowp + tgrp` contre `tp` : équivalence établie sur un seul tirage.
+4. Pluie à T2m négative : à comparer avec des observations ou l'altitude du modèle.
+5. Temps de téléchargement AROME 0,025° 0-51 non chronométré ; débits très variables d'une mesure à l'autre (10 à 48 Mo/s).

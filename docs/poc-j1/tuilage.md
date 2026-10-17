@@ -143,7 +143,7 @@ Positions : 6 à 3 mailles (0,03°) à l'intérieur du bord ouest/est du domaine
 1. **Tuiles entièrement vides non écrites** (aucun point valide dans les 258 × 258 pixels) : gain de 86 tuiles en HD ; le client doit traiter une tuile absente comme « pas de donnée ». Contrat §3 dit « seules les tuiles qui recoupent [l'emprise] sont écrites » : lecture raffinée, à confirmer avec la visualisation.
 2. **Notion de « pas » pour les échelles racine carrée** : le pas est inégal ; le métadonnée `step` donne le pas maximal (en haut de plage, ex. 39,3 J/kg pour la CAPE) ; l'erreur ≤ demi-pas local est vérifiée par test.
 3. **Un voisin NaN** donne NaN, comme demandé : la limite du domaine valide est donc érodée d'environ un pixel de tuile (850 m à z7 AROME).
-4. **Métadonnées PMTiles** : en plus des champs du contrat (`encoding`, `min`, `max`, `scale`, `unit`, `border`, `tile_size`), `variable`, `model`, `run`, `step`, `step` (pas), `stored_size`, `nodata_code`, `components` (vent), `minzoom`/`maxzoom`, `attribution`. Pour le vent, `min`/`max` valent ±64, `unit` m/s.
+4. **Métadonnées PMTiles** : en plus des champs du contrat (`encoding`, `min`, `max`, `scale`, `unit`, `border`, `tile_size`), `variable`, `model`, `run`, `step` (échéance), `quant_step` (pas de quantification ; correction de l'étape 2, une collision de clé écrasait le pas), `profile`, `levels`, `stored_size`, `nodata_code`, `components` (vent), `minzoom`/`maxzoom`, `attribution`. Pour le vent, `min`/`max` valent ±64, `unit` m/s.
 5. **Compression de tuile PMTiles : aucune** (le WebP est déjà compressé) ; en-tête `tile_type = webp`. La compression interne (annuaires, métadonnées) est gzip, comme le paquet `pmtiles` l'impose.
 6. **WebP des scalar8 en RVB (R = G = B)**, non en niveaux de gris : contrainte de libwebp (accepté par le contrat « RVB ou niveaux de gris »). Pas de canal alpha (mode vérifié en test).
 7. **Pas de `pipeline/__init__.py`** : `python3 -m pipeline.tiling` fonctionne en paquet-espace de noms ; à ne pas ajouter sans accord (partagé avec l'ingestion).
@@ -156,3 +156,87 @@ Positions : 6 à 3 mailles (0,03°) à l'intérieur du bord ouest/est du domaine
 - Validation croisée avec la visualisation : le décodeur de référence (`decode.py`) donne des valeurs à comparer au rendu WebGL, en particulier la convention de bord (indice `p + 0,5`).
 - Les estimations d'un tirage complet reposent sur les échéances 0 à 6 ; les échéances lointaines (nuages, précipitations plus actifs) peuvent peser davantage.
 - `gust10` HD et `cloud_total` : hypothèses de l'ingestion, non vérifiées ici.
+
+
+## Réduction du poids et 0-51 h (étape 2)
+
+Options ajoutées, **le profil `contrat` reste le défaut** : `python3 -m pipeline.tiling ... --profil <nom>` (définitions : `pipeline/tiling/profiles.py`). Mesures sur `out/hd_step03.npz` (HD, z5-z8), toutes variables, poids d'une échéance, erreurs contre la source rééchantillonnée en flottant (tuile : tous les pixels décodés, un sur trois des tuiles du zoom maximal stocké ; position : 200 points aléatoires valides, bilinéaire client sur tuiles décodées contre bilinéaire directe sur la source). `python3 -m pipeline.tiling.profils_mesure --canon out/hd_step03.npz --out m.json`.
+
+### Variantes (poids total d'une échéance HD ; contrat = 41,17 Mo)
+
+| Profil | Poids | Vent | Erreur max / moy du pixel de tuile | Erreur max / moy à 200 positions | Ce qui se voit |
+|---|---|---|---|---|---|
+| `vent8` (8 bits/composante ±64 m/s) | 27,3 Mo | 4,93 Mo (18,77) | 0,252 / 0,126 m/s | 0,242 / 0,103 m/s | 0,5 m/s ≈ 1 nœud ; invisible sur flèches/particules, visible seulement sur un aplat de vitesse à pas fin |
+| `vent8-48` (±48 m/s) | 28,0 Mo | 5,65 Mo | 0,189 / 0,095 m/s | 0,187 / 0,073 m/s | idem, plus fin ; la plage ±48 est à confirmer (mesuré : composantes ≤ 17 m/s sur ce tirage ; une tempête dépasse rarement 40 m/s en vent moyen, valeur bornée au-delà) |
+| `vent12-gros2` (wind12 arrondi à 4 codes) | 34,1 Mo | 11,67 Mo | 0,0625 / 0,031 m/s | 0,061 / 0,023 | rien ; **même format**, aucun changement de décodeur |
+| `vent12-gros3` (8 codes) | 30,3 Mo | 7,95 Mo | 0,125 / 0,063 m/s | 0,123 / 0,051 | rien |
+| `vent-z7` (vent sans z8) | 29,4 Mo | 7,0 Mo | 0,0156 / 0,0078 (z7) | 0,137 / 0,013 m/s (surzoom depuis z7) | rien à l'œil sur flèches |
+| `sans-bordure-z8` | 40,8 Mo | 18,59 | inchangée | inchangée | **−1,0 %** seulement : la bordure ne coûte que 1,6 % de pixels ; en contrepartie la couture réapparaît (sauts jusqu'à 1,5 K / 2 m/s mesurés plus haut). **Déconseillé.** |
+| `lossy-t2m` (WebP qualité 95, tuiles sans trou) | 39,4 Mo | | t2m **1,77 K max** / 0,162 K moy (contrat : 0,197 / 0,099) | 0,607 / 0,139 K | t2m : 2,79 vers 1,01 Mo (−64 %) mais erreur max 9 fois plus grande, concentrée sur les fronts : **rejeté** (et le décodage avec perte peut différer d'un navigateur à l'autre ; les tuiles à trous restent sans perte) |
+| `bits7` (rh2m, cloud_total, gust10 sur 126 niveaux) | 37,9 Mo | | rh2m 0,40 % ; cloud 0,40 % ; rafale 0,25 m/s | | −3,3 Mo (−8 %) |
+| `pas-gros` (t2m 0,5 K, rh2m/cloud 1 %, rafale 0,5 m/s) | 36,9 Mo | | t2m 0,25 K ; rh2m 0,50 % ; cloud 0,50 % ; rafale 0,25 m/s | t2m 0,247 ; rh2m 0,49 ; rafale 0,247 | −4,3 Mo (−10 %) ; valeurs inférieures à celles qu'un utilisateur lit (température au demi-degré, humidité et nébulosité au pour cent, rafale au demi-m/s : **hypothèse d'affichage à valider avec la visualisation**) |
+| `z7-tout` (aucun z8) | 15,0 Mo | 7,0 | t2m 0,197 (z7) | t2m 0,21 ; rh2m 0,73 % ; cloud 4,9 % (p99 3,4) ; rafale 0,68 m/s ; cape 7,2 J/kg | −63 % ; t2m, rh2m, cape, vent : aucune différence utile ; cloud_total et rafale perdent un peu de détail aux fronts |
+
+Constats : le zoom 8 est de loin le premier poste (63 % du poids HD) alors qu'il ne fait que sur-échantillonner la maille native (~1 km pour des pixels de 425 m) ; le WebP avec perte n'est pas tenable à cause des fronts et des tuiles de bord ; le vent 8 bits réduit le vent de 74 % pour un pas de 0,38 à 0,5 m/s.
+
+### Configuration recommandée : profil `reduit`
+
+Vent `wind8` (±48 m/s) ; `t2m` 0,5 K, `rh2m` et `cloud_total` 1 %, `gust10` 0,5 m/s ; **plafond z7** pour `t2m`, `gust10`, `rh2m`, `cloud_total`, `cape` et `wind10` ; z8 conservé pour `precip_rate` et `snow_fraction` (cellules petites et nettes, 1,2 Mo seulement) ; bordure 1 px et WebP sans perte conservés. Variante `reduit-z8` : mêmes encodages mais tous les zooms (23,8 Mo par échéance).
+
+Poids d'une échéance HD (`out/hd_step03.npz`) : **9,36 Mo** (contrat 41,17, soit −77 %) : t2m 0,89, gust10 1,14, rh2m 1,38, cloud_total 1,41, cape 1,28, precip_rate 1,24, snow_fraction 0,02, vent 2,01. Erreurs du profil `reduit` (pixel de tuile max / moy ; 200 positions max / moy) :
+
+| Variable | Pixel de tuile (max / moy) | 200 positions (max / moy / p99) |
+|---|---|---|
+| t2m | 0,250 / 0,125 K | 0,283 / 0,105 / 0,238 K |
+| rh2m | 0,500 / 0,250 % | 0,673 / 0,210 / 0,613 % |
+| cloud_total | 0,500 / 0,112 % | **5,12** / 0,223 / 3,19 % |
+| gust10 | 0,250 / 0,125 m/s | 0,618 / 0,097 / 0,331 m/s |
+| wind10 | 0,189 / 0,095 m/s | 0,208 / 0,073 / 0,172 m/s |
+| cape | 12,6 / 0,57 J/kg | 7,18 / 0,52 / 4,89 J/kg |
+| precip_rate | 0,241 / 0,0014 mm/h | 0,051 / 0,001 / 0,026 mm/h |
+
+Réserve : `cloud_total` atteint 5 % d'écart à un point de front net (surtout z7) ; moyenne 0,22 %. Considéré invisible pour une nébulosité rendue en opacité, **à valider visuellement**. Réserve vent : la plage ±48 doit être confirmée sur une vraie tempête.
+
+### Tirage complet 0-51 h (mesures réelles)
+
+AROME : 52 échéances tuilées dans les deux profils. HD : **seules les échéances 0 à 18 existent** dans `out/canon/arome-hd/2026-10-17T06Z/` (l'ingestion s'est arrêtée après `18.npz` vers 15:06, plus de processus actif au moment de la mesure) ; les échéances 19 à 51 ne sont donc **pas** mesurées.
+
+| | Échéances | Poids mesuré | Poids moyen / échéance | Temps de tuilage (20 cœurs) |
+|---|---|---|---|---|
+| AROME, `contrat` (`out/tiles/arome/`) | 52 | **721 Mo** (342 Mo de vent) | 13,9 Mo (10,6 à 14,4) | 107 s (2,05 s/éch.) |
+| AROME, `reduit` (`out/tiles-reduit/arome/`) | 52 | **413 Mo** (vent 101 Mo) | 7,95 Mo | 87 s |
+| HD, `contrat` (`out/tiles/arome-hd/`) | 19 (0-18) | 773 Mo (vent 355 Mo) | 40,7 Mo (31,8 à 42,6) | 115 s (6,1 s/éch.) |
+| HD, `reduit` (`out/tiles-reduit/arome-hd/`) | 19 (0-18) | 179 Mo (vent 38 Mo) | 9,4 Mo (5,7 à 10,7) | 41 s (2,2 s/éch.) |
+
+Pas d'évolution marquée du poids avec l'échéance (HD contrat 39,6 à 42,6 Mo) ; la mesure AROME sur 52 échéances (721 Mo) confirme l'extrapolation précédente (0,7 Go) à 3 % près.
+
+**Projection d'un tirage de 52 échéances, ESTIMATION pour la HD** (19 échéances mesurées, 33 extrapolées) : HD `contrat` ≈ 31,8 + 51 × 40,7 ≈ **2,1 Go** ; HD `reduit` ≈ 5,7 + 51 × 9,4 ≈ **0,49 Go**. Tirage AROME + HD : `contrat` ≈ 2,8 Go, `reduit` ≈ **0,9 Go** ; trois tirages : ≈ 8,4 Go contre ≈ **2,7 Go**. Temps de tuilage du tirage complet : `contrat` ≈ 5,5 min HD + 1,8 min AROME, `reduit` ≈ 2 min + 1,5 min.
+
+À refaire quand l'ingestion aura fini la HD : `python3 -m pipeline.tiling --canon out/canon/arome-hd/2026-10-17T06Z/[0-9][0-9].npz --out out/tiles[-reduit] [--profil reduit]`.
+
+### Précision à position quelconque (double interpolation)
+
+200 positions aléatoires valides (précipitations : 200 cellules pluvieuses > 0,1 mm/h), **sans quantification** pour isoler l'effet du rééchantillonnage : le client interpole en bilinéaire entre les quatre pixels voisins d'une tuile dont les pixels valent soit la bilinéaire de la source (tuilage actuel), soit la maille source la plus proche (`proche`). Référence : bilinéaire directe sur la source (`python3 -m pipeline.tiling.precision`). Erreur max / moyenne :
+
+| Variable | bilinéaire z7 | **bilinéaire z8 (actuel)** | bilinéaire z9 | proche z8 | proche z9 |
+|---|---|---|---|---|---|
+| t2m (K) | 0,251 / 0,014 | **0,097 / 0,005** | 0,033 / 0,001 | 0,394 / 0,032 | 0,526 / 0,038 |
+| rh2m (%) | 2,54 / 0,072 | **1,11 / 0,021** | 0,255 / 0,008 | 2,33 / 0,157 | 2,53 / 0,177 |
+| cloud_total (%) | 1,76 / 0,134 | **1,30 / 0,042** | 0,538 / 0,014 | 21,7 / 0,598 | 16,2 / 0,725 |
+| vent u (m/s) | 0,216 / 0,012 | **0,140 / 0,004** | 0,013 / 0,001 | 0,278 / 0,032 | 0,244 / 0,038 |
+| vent v (m/s) | 0,175 / 0,018 | **0,058 / 0,005** | 0,026 / 0,001 | 0,749 / 0,044 | 0,749 / 0,047 |
+| rafale (m/s) | 0,363 / 0,016 | **0,047 / 0,003** | 0,051 / 0,001 | 0,763 / 0,058 | 0,850 / 0,060 |
+| précip. (mm/h) | 0,355 / 0,006 | **0,037 / 0,001** | 0,014 / 0 | 1,15 / 0,025 | 1,59 / 0,032 |
+
+Conclusions : (1) le **plus proche voisin est pire** à tous les zooms (erreur moyenne 3 à 40 fois plus grande, il crée des blocs) : à rejeter ; (2) la **résolution double (z9) réduit l'erreur max d'un facteur 3 à 10** mais pèse beaucoup : mesuré sur le HD, z9 seul pèse 4,53 Mo pour `t2m` (z5-z8 : 2,79 Mo) et 31,3 Mo pour le vent (z5-z8 : 18,8 Mo), soit environ 2,5 fois le zoom 8 ; **non justifié** pour un gain d'erreur qui reste sous les seuils d'affichage ; (3) l'erreur moyenne à z8 est déjà ≤ 0,04 % / 0,02 K / 0,005 m/s, et le profil `reduit` en z7 triple le maximum sans changer la moyenne. Pas de modification recommandée du rééchantillonnage.
+
+### Tests ajoutés
+
+`tests/tiling/test_profils.py` (8 tests, les 18 précédents passent, 26 au total) : profil par défaut inchangé, aller-retour `wind8` (±64 et ±48) et code 0, `wind12` grossier dans le même format, niveaux réduits, plafond de zoom par variable et métadonnées du profil `reduit`, erreurs ≤ demi-pas sur les tuiles du profil `reduit`, tuiles sans bordure lues et échantillonnées par le décodeur, WebP avec perte jamais écrit sur une tuile contenant du « pas de donnée ».
+
+### Écarts et points ouverts de l'étape 2
+
+- Le décodeur déduit la bordure de la taille réelle de l'image (256 ou 258) et gère `wind8`/`levels` ; un client WebGL doit lire `encoding`, `max` (demi-plage du vent) et `levels` dans les métadonnées PMTiles, sans quoi `reduit` n'est pas décodable avec les constantes du contrat.
+- `wind8` est un nouvel encodage (u en R, v en G, B = 0) : **hors contrat**, à valider avec la visualisation (le contrat n'est pas modifié).
+- Échéances HD 19 à 51 non mesurées (ingestion arrêtée à 18).
+- Seuils d'affichage (0,5 K, 1 %, 0,5 m/s) et plage de vent ±48 m/s : hypothèses.

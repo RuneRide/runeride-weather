@@ -67,15 +67,33 @@ def fichiers_requis(model, steps, run, paquets=("SP1", "SP2")):
 def localiser(model, packet, label, run, dossiers):
     """Cherche un fichier déjà présent (nom complet ou nom sans tirage), récursivement."""
     res = RESOLUTION[model]
-    cibles = {nom_fichier(model, packet, label, run), f"arome__{res}__{packet}__{label}.grib2"}
+    complet, nu = nom_fichier(model, packet, label, run), f"arome__{res}__{packet}__{label}.grib2"
     for d in dossiers:
         if not os.path.isdir(d):
             continue
         for racine, _dirs, fichiers in os.walk(d):
             for f in fichiers:
-                if f in cibles:
+                if f == complet:
+                    return os.path.join(racine, f)
+                # nom sans tirage (échantillons) : accepté seulement si l'en-tête GRIB confirme le tirage
+                if f == nu and _tirage_du_fichier(os.path.join(racine, f)) == run:
                     return os.path.join(racine, f)
     return None
+
+
+def _tirage_du_fichier(chemin):
+    """Tirage lu dans le premier message GRIB (`2026-10-17T06:00:00Z`), ou None."""
+    try:
+        import eccodes
+        with open(chemin, "rb") as fh:
+            h = eccodes.codes_grib_new_from_file(fh)
+            try:
+                d, t = eccodes.codes_get(h, "dataDate"), eccodes.codes_get(h, "dataTime")
+            finally:
+                eccodes.codes_release(h)
+        return f"{d // 10000:04d}-{d // 100 % 100:02d}-{d % 100:02d}T{t // 100:02d}:{t % 100:02d}:00Z"
+    except Exception:
+        return None
 
 
 def _taille_distante(url):
@@ -122,7 +140,7 @@ def _telecharger_un(url, dest, essais=4):
     raise IOError(f"téléchargement incomplet de {url} ({derniere})")
 
 
-def telecharger(model, besoins, run, dossiers_src, dossier_dl):
+def telecharger(model, besoins, run, dossiers_src, dossier_dl, connexions=MAX_CONNEXIONS):
     """Assure la présence de chaque fichier de `besoins`. Retourne {(paquet, label): (chemin, mesure)}."""
     resultat, a_faire = {}, []
     for packet, label in besoins:
@@ -141,7 +159,7 @@ def telecharger(model, besoins, run, dossiers_src, dossier_dl):
         dest = os.path.join(dossier_dl, nom_fichier(model, packet, label, run))
         return pl, _telecharger_un(url_fichier(model, packet, label, run), dest)
 
-    with ThreadPoolExecutor(max_workers=MAX_CONNEXIONS) as ex:
+    with ThreadPoolExecutor(max_workers=min(connexions, MAX_CONNEXIONS)) as ex:
         for pl, mesure in ex.map(tache, a_faire):
             resultat[pl] = (mesure["fichier"], mesure)
     return resultat

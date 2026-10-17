@@ -45,3 +45,55 @@ Le critère d'acceptation de J1 est **tenu** : les valeurs relues dans les tuile
 - **`snow_fraction`** : non validée sur un cas de neige (la fixture n'en contient pas).
 - **Échéances lointaines** (jusqu'à +51 h) : tout a été mesuré sur les échéances 0 à 6.
 - **Inventaire complet des paramètres `unknown`** et des paquets d'altitude.
+
+---
+
+# Étape 2 : risques sur les données (17 octobre 2026, après-midi)
+
+Trois sous-agents en parallèle : extension à 0-51 h et neige (ingestion), réduction du poids (tuilage), validation croisée. Même convention : **recontrôlé** par le coordinateur, **rapporté** par l'agent.
+
+## Verdict
+
+Les risques « échéances lointaines », « raccord de groupes » et « neige » sont **levés pour AROME 0,025°** ; la **convention du vent est validée** ; le poids d'un tirage est **mesuré** et réductible de 68 %. **Deux problèmes restent réels** : un tirage HD peut être publié **incomplet** par Météo-France, et le profil de poids `reduit` impose une **règle de décodage unique** que la visualisation n'applique pas encore.
+
+## Recontrôlé
+
+| Contrôle | Résultat |
+|---|---|
+| **Convention du vent**, refaite sur les composantes **brutes** du GRIB AROME 0,025° (497 943 points à plus de 2 m/s, échéance 3) | direction météo `(270 − atan2(v,u)) mod 360` contre `10wdir` du modèle : écart **max 0,203°, moyen 0,0385°** ; formule inversée : 180° ; u et v permutés : 76° ; `hypot(u,v)` contre `10si` : 0,0092 m/s. **Validée.** |
+| Flèches du viewer | `fleches.js` dessine vers où va le vent (repère d'écran à axe vertical inversé pris en compte) : **correct** |
+| Neige AROME 0,025°, tirage 06Z, échéances 1-51 (3 671 202 points précipitants) | part de fraction de neige ≥ 0,5 : **95,5 %** sous −2 °C, 62,3 % entre −2 et 0 °C, 8,9 % entre 0 et 2 °C, 0,3 % entre 2 et 4 °C ; `snow_fraction` bornée à 0..1 |
+| Tests | ingestion 32 (1 ignoré) ; tuilage 26 (agent) ; validation 16 (agent, 14 ignorés sans eccodes) |
+| **Tirage HD complet 0-51 h** (HD 03Z, tuilé par le coordinateur) | **2,15 Go en profil `contrat`** (5 min 21 s, 20 cœurs) ; **0,51 Go en profil `reduit`** (1 min 55 s) ; 412 fichiers (416 moins 4 variables absentes à l'échéance 0) |
+| AROME 0,025°, 52 échéances | **0,72 Go** `contrat`, **0,41 Go** `reduit` |
+| **Poids d'un tirage complet (HD + AROME)** | **2,87 Go** `contrat`, **0,92 Go** `reduit` (−68 %) ; pour 3 tirages conservés : ≈ **8,6 Go** contre ≈ **2,8 Go** |
+| **Précision du profil `reduit`** (200 points, échéance 30, z7, mon décodeur) | température et rafales : écart max **0,250** = demi-pas de 0,5, **à condition de décoder avec `quant_step`** (voir ci-dessous) |
+| **Disponibilité côté Météo-France** (listage S3, 13:17 UTC) | SP1 HD **incomplet** au tirage 06 h (19 échéances sur 52) et **absent** au tirage 09 h ; SP2, SP3, HP1 complets ; tirages 00 h et 03 h complets |
+
+## Problème de contrat découvert : le décodage ne se déduit plus de `min` et `max`
+
+Avec le profil `reduit`, mon décodeur (formule du contrat, `min + (code−1)/254 × (max−min)`) donne **jusqu'à 13,6 K d'erreur** sur la température. Ce n'est pas une erreur des données : le profil code `v = min + (code − 1) × quant_step` (0,5 K), et les métadonnées gardent les mêmes `min`/`max`. **Règle retenue pour le contrat** : décoder avec `quant_step` dans tous les profils (identique à l'ancienne formule pour `contrat`). **La visualisation décode encore avec `min`/`max` : elle affichera des valeurs fausses sur les tuiles `reduit` tant qu'elle n'est pas adaptée**, et ne sait pas lire `wind8`.
+
+## Rapporté par les agents, non rejoué
+
+- **AROME 0,025° 0-51 h** : 52 échéances en 73 s, pic mémoire 1,1 Go, 703 Mo téléchargés. Raccords 7, 13 … 49 continus à 4 % près (6 à 45 fois d'erreur si le cumul précédent était oublié) ; somme des débits contre cumul : 0,043 mm sur 562 mm ; groupe `49H51H` sans cas particulier ; `tp` contre `tirf+tsnowp+tgrp` : 0,029 mm/h au plus.
+- **Neige réelle** : Alpes (Mont-Blanc, ≈ 60 mm d'eau cumulés à +51 h) et Pyrénées ; 38 à 40 % des points précipitants entre −2 et 0 °C ne sont pas classés en neige, **à expliquer**.
+- **AROME contre ARPEGE 0,1°** (moyenne par blocs 5×5, 41 145 cellules, échéances 3 et 6) : vent corrélation 0,96, biais ≤ 0,22 m/s, RMSE ≈ 1 m/s ; pression corrélation 0,999 (pas de facteur d'unité) ; `t2m` biais +0,25 à +0,31 K, corrélation 0,98 ; pluie : AROME donne 0,82 à 0,87 du cumul ARPEGE, corrélation 0,51 à 0,59 (écart de modèle, cause non testée).
+- **Plausibilité** (échéances 0-6) : aucune valeur hors bornes physiques ; rafale < vent moyen sur 0,05 à 0,88 % des points (vent faible, cause inconnue) ; le masque de bord change sur 2 (AROME) et 6 (HD) points entre les échéances 0 et 1 ; un point HD dépasse 8 K/h.
+- **Valeurs extrêmes** sur 0-51 h : débits de 180 à 220 mm/h et vent qui saute de 35 m/s au large des Baléares (cellule orageuse plausible) ; chute de `t2m` de 11 à 12 K en 1 h au Portugal, présente dans les deux modèles : **non confrontées à une autre source**.
+- **Tuilage, variantes** : vent 8 bits (`vent8`) −14 Mo par échéance HD pour 0,25 m/s d'erreur max ; sans bordure à z8 : −1 % seulement et couture qui revient (déconseillé) ; WebP avec perte pour `t2m` : erreur 1,77 K (rejeté) ; plus proche voisin pire que le bilinéaire à tous les zooms ; z9 réduit l'erreur à position quelconque d'un facteur 3 à 10 mais pèse environ 2,5 fois plus.
+- **`cloud_total` en profil `reduit`** : 5 % d'écart max aux fronts nets (0,22 % en moyenne).
+
+## Décisions que cela appelle
+
+1. **Profil de poids de production** : `reduit` (0,92 Go par tirage) après validation visuelle de `wind8`, plutôt que `contrat` (2,87 Go). Décision D13.
+2. **Règle de décodage unique** `min + (code−1) × quant_step` à inscrire au contrat (fait) et à implémenter dans la visualisation.
+3. **Publication par variable et par échéance** (D8 révisée) à cause des tirages HD incomplets.
+4. **HD 06Z au-delà de 18 h** : à rejouer quand Météo-France aura complété SP1 ; en attendant le tirage HD 03Z (0-51 h) sert de substitut dans les mesures.
+
+## Reste à faire
+
+- Adapter la visualisation à `quant_step` et à `wind8`, puis valider visuellement le profil `reduit`.
+- Rejouer HD 06Z 19-51 quand SP1 sera publié ; comprendre pourquoi il ne l'est pas.
+- Expliquer les 38-40 % de précipitations « non neige » entre −2 et 0 °C ; confronter les valeurs extrêmes à une autre source.
+- Mesures sur un vrai téléphone en 4G ; particules de vent ; sélecteur de modèle ; manifest ; fond de carte.

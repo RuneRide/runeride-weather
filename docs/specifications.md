@@ -87,7 +87,7 @@ Météo-France (S3 public, GRIB2, 8 tirages/jour)
 
 **DÉCISION D2 : tuiles de données en PMTiles, un fichier par (modèle, tirage, variable, échéance).** Même technologie que le fond de carte, lecture par requêtes `Range`, aucun processus persistant. Alternatives écartées : millions de petits fichiers XYZ (inodes, listage) ; Zarr ou COG (outillage navigateur moins mûr) ; une seule archive par variable avec toutes les échéances (cache et publication progressive moins commodes).
 
-**DÉCISION D8 : publication progressive.** Une échéance est publiée dès que ses fichiers sont traités ; un `manifest.json` par tirage liste l'état de chaque échéance. Le client affiche le **dernier tirage dont l'échéance demandée existe**, et se rabat sur le tirage précédent pour les échéances manquantes : l'utilisateur n'attend pas la fin d'un tirage de 2,6 à 5,3 h après son heure nominale.
+**DÉCISION D8 : publication progressive, par variable et par échéance.** Une échéance d'une variable est publiée dès que ses fichiers sont traités ; un `manifest.json` par tirage liste l'état de **chaque variable à chaque échéance**. C'est nécessaire parce qu'un tirage peut être publié **incomplet paquet par paquet** : le 17/10 à 13:17 UTC, le tirage HD de 06 h n'avait que 19 échéances de SP1 (température, vent, rafales) alors que ses autres paquets étaient complets, et celui de 09 h n'avait aucune échéance de SP1 ([donnees-arome.md §3](donnees-arome.md)). Pour chaque variable, le client prend le **dernier tirage où elle existe**, et ne mélange jamais deux tirages dans une même image de la frise sans l'indiquer. Le client affiche le **dernier tirage dont l'échéance demandée existe**, et se rabat sur le tirage précédent pour les échéances manquantes : l'utilisateur n'attend pas la fin d'un tirage de 2,6 à 5,3 h après son heure nominale.
 
 **DÉCISION D9 : rétention.** Les 3 derniers tirages complets sont gardés (≈ 9 h de recul), le reste est purgé par règle de cycle de vie S3. Permet « comparer avec le tirage précédent » plus tard.
 
@@ -101,7 +101,7 @@ Météo-France (S3 public, GRIB2, 8 tirages/jour)
 - **Bordure de 1 px recouvrante** entre tuiles pour éviter les coutures de l'interpolation bilinéaire (DÉCISION à valider au PoC).
 - Charge utile : **WebP sans perte** (ou PNG), valeurs quantifiées en canaux de couleur, **sans canal alpha de données** (la pré-multiplication du navigateur corromprait les valeurs) ; décodage avec `premultiplyAlpha: 'none'`.
 - **Code 0 réservé = « pas de donnée »** (points masqués) ; la plage utile est codée de 1 à 255 (8 bits) ou 1 à 65 535 (16 bits).
-- Mesuré : température 8 bits en pleine grille HD = 0,62 Mo en WebP sans perte ; vent u/v sur 4 canaux 16 bits = 8,4 Mo en PNG avant masquage, ce qui est trop lourd : d'où le codage 24 bits (RVB) du §5.2, à re-mesurer. **Mesuré au PoC J1** (échéances 0 à 6, WebP sans perte) : ≈ **41 Mo par échéance en HD** (7 variables, dont le vent pour 19 Mo, soit 46 %) et ≈ **14 Mo en AROME** ; **ESTIMATION** pour un tirage de 52 échéances : **≈ 2,1 Go en HD et ≈ 0,7 Go en AROME**, donc ≈ 8,4 Go pour 3 tirages (plus que l'estimation initiale de 4 à 5 Go ; les échéances lointaines peuvent peser davantage). Poids du vent à arbitrer. Détails : [poc-j1/synthese.md](poc-j1/synthese.md).
+- Mesuré : température 8 bits en pleine grille HD = 0,62 Mo en WebP sans perte ; vent u/v sur 4 canaux 16 bits = 8,4 Mo en PNG avant masquage, ce qui est trop lourd : d'où le codage 24 bits (RVB) du §5.2, à re-mesurer. **Mesuré au PoC J1 sur des tirages complets de 52 échéances** (WebP sans perte) : profil `contrat` **2,15 Go en HD + 0,72 Go en AROME = 2,87 Go par tirage** ; profil `reduit` (vent 8 bits, pas de quantification plus gros, zoom maximal 7 sauf pluie et neige) **0,51 + 0,41 = 0,92 Go par tirage** (−68 %) ; soit pour 3 tirages conservés **≈ 8,6 Go** ou **≈ 2,8 Go**. Le vent pèse 46 % en `contrat`. **DÉCISION D13** : adopter `reduit` en production après validation visuelle de `wind8`. Détails : [poc-j1/synthese.md](poc-j1/synthese.md).
 
 ### 5.2 Quantification
 
@@ -242,7 +242,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | Disponibilité | interface statique ; en cas d'échec d'un tirage, le précédent reste servi | DÉCISION |
 | Reprise sur erreur | téléchargements repris, somme de contrôle de taille, nouvel essai, alerte si aucun nouveau tirage depuis 6 h | DÉCISION |
 | Coût | ordre de grandeur de quelques euros à quelques dizaines d'euros par mois, dominé par la diffusion ; à chiffrer au jalon J5 | ESTIMATION |
-| Stockage | ~8 à 9 Go pour 3 tirages (§5.1, mesuré sur 7 échéances puis extrapolé) | ESTIMATION |
+| Stockage | **≈ 8,6 Go** (profil `contrat`) ou **≈ 2,8 Go** (profil `reduit`) pour 3 tirages (§5.1) | MESURÉ sur des tirages complets |
 | Calcul | décodage 0,43 s pour 6 champs HD (mesuré) ; un tirage complet en 15 à 25 min sur 1 cœur, quelques minutes en parallèle | ESTIMATION |
 | Vie privée | position et trace ne servent qu'à répondre ; aucun traceur, aucune mesure d'audience tierce ; journaux sans coordonnées précises | DÉCISION |
 | **Service public : maîtrise du coût** | budget AWS avec alarmes et plafond, cache CDN long sur les tuiles (immuables par tirage), diffusion en `Range`, limitation de débit sur l'API point / itinéraire, quota de requêtes par IP | DÉCISION |
@@ -263,7 +263,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 |---|---|---|
 | **J0** | Valider ce document et les décisions D1 à D9 | décisions tranchées, noms de domaines figés |
 | **J1b** AROME-PI | **fait** : source = API Météo-France (WCS), licence ouverte, compte gratuit et jeton requis ; reste à créer le compte et à inventorier les paramètres avec un jeton | compte créé par le titulaire, jeton dans Secrets Manager, `GetCapabilities` lu, paramètres et volumes reportés dans `donnees-arome.md` |
-| **J1** PoC données (**fait le 17/10** : 20 points contrôlés à moins d'un demi-pas, voir [poc-j1/synthese.md](poc-j1/synthese.md)) | un tirage AROME + HD : téléchargement, décodage, masque, dé-cumul, tuilage de vent, température, pluie | valeurs identiques à eccodes en 20 points de contrôle (écart ≤ pas de quantification) ; poids et temps mesurés et reportés ici |
+| **J1** PoC données (**fait le 17/10** : 20 points contrôlés à moins d'un demi-pas ; risques sur les données traités à 0-51 h, raccord de groupes, neige, convention du vent : voir [poc-j1/synthese.md](poc-j1/synthese.md)) | un tirage AROME + HD : téléchargement, décodage, masque, dé-cumul, tuilage de vent, température, pluie | valeurs identiques à eccodes en 20 points de contrôle (écart ≤ pas de quantification) ; poids et temps mesurés et reportés ici |
 | **J2** PoC visualisation (**prototype fait**, mesures sur appareil réel à faire) | MapLibre + couche couleur + frise interpolée sur un appareil réel | 30 images/s en animation, première couche < 2,5 s en 4G ; mesuré en WebGL logiciel : première couche 0,9 à 1,1 s, 0,91 Mo à l'ouverture sur mobile (3,41 Mo sur grand écran) |
 | **J3** Vent et modèles | particules, rafales, bascule AROME / HD, isobares vectorielles, vent en altitude (option) | bascule invisible, pas de couture entre tuiles, particules adaptatives |
 | **J4** Point | météogramme, séries, API `/v1/point` | réponse en moins de 500 ms (ESTIMATION), valeurs égales à celles de la carte |
@@ -287,6 +287,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | R6 | Coût | diffusion supérieure aux estimations | CDN avec cache fort, compression, plafonds de budget |
 | R7 | Légal | réutilisation des tuiles dérivées et attribution | relecture de la licence, mention systématique |
 | R9 | AROME-PI | dépend d'un compte et d'un jeton, limite de 100 requêtes/min, catalogue lisible seulement avec le jeton ; PIAF probablement non réutilisable | créer le compte avant J8 ; mesurer le nombre de requêtes par tirage ; PIAF hors v1 |
+| R11 | Complétude | un tirage HD arrive incomplet (paquet SP1 absent ou tronqué alors que les autres sont complets, constaté le 17/10) | disponibilité par variable et par échéance (D8), repli sur le tirage précédent ou sur AROME 0,025° pour la variable manquante, supervision de la complétude |
 | R10 | Multi-modèles | licences et formats hétérogènes, coutures visibles | priorité fixe, attribution dynamique, un adaptateur isolé par source (voir couverture-europe.md) |
 | R8 | Positionnement | un tiers pourrait croire à une alerte officielle | avertissements, aucun vocabulaire d'alerte |
 | O1 | Public | ~~service réservé à l'application ?~~ **Tranché le 17/10/2026 : service public**, sans compte | garde-fous du §8 |
@@ -311,3 +312,4 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | D10 | Architecture multi-modèles : adaptateur par source, contrat de variables canoniques, manifest par modèle (v1 : AROME et HD seulement, mais le contrat est écrit dès le départ) | oui |
 | D11 | Couche de base Europe : ARPEGE 0,1° en premier, puis ICON-D2, hors v1 | oui |
 | D12 | Très court terme : AROME-PI via l'API WCS de Météo-France, jeton dans Secrets Manager ; PIAF exclu tant que sa licence n'est pas confirmée | oui, après création du compte |
+| D13 | Profil de poids de production : `reduit` (0,92 Go par tirage au lieu de 2,87 Go), après validation visuelle de `wind8` ; règle de décodage unique `min + (code−1) × quant_step` | oui, après adaptation de la visualisation |

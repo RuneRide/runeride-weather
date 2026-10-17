@@ -19,6 +19,12 @@ Règles : **ne pas écrire hors de son dossier**, **ne pas faire de commit ni de
 
 `rh2m` et `cloud_total` sont bornées à 0..100 (la fixture a été régénérée en conséquence) ; `gust10` HD = `hypot(max_10efg, max_10nfg)` est **confirmée** (voir `docs/poc-j1/ingestion.md`) ; en AROME 0,025°, `tsnowp` et `tgrp` viennent de SP1 ; `pipeline/__init__.py` est partagé par les briques.
 
+## Révision 2 (après l'étape « risques sur les données »)
+
+**Règle de décodage unique pour les scalaires linéaires**, valable pour tous les profils de poids : `v = min + (code − 1) × quant_step`, où `quant_step` est lu dans les métadonnées PMTiles. Pour le profil `contrat`, `quant_step = (max − min) / 254`, donc l'ancienne formule `min + (code−1)/254 × (max−min)` donne le même résultat. **Un décodeur qui utilise seulement `min` et `max` se trompe sur les autres profils** : constaté sur le profil `reduit` (température décodée avec 13,6 K d'erreur). Dans les métadonnées, `step` désigne désormais l'**échéance** et `quant_step` le pas de quantification.
+
+Profils (option `--profil`, le défaut reste `contrat`) : `contrat` (référence) et `reduit` (vent `wind8` sur ±48 m/s, pas de 0,5 K pour `t2m`, 1 % pour `rh2m` et `cloud_total`, 0,5 m/s pour `gust10`, zoom maximal 7 sauf `precip_rate` et `snow_fraction` qui gardent 8). **`wind8` est hors contrat** et n'est pas encore pris en charge par la visualisation.
+
 ## 2. Champs canoniques (sortie de l'ingestion, entrée du tuilage)
 
 Un fichier `.npz` (`numpy.savez_compressed`) par **(modèle, tirage, échéance)** : `out/canon/<modèle>/<tirage>/<échéance>.npz`, `<modèle>` ∈ {`arome-hd`, `arome`}, `<tirage>` au format `AAAA-MM-JJTHHZ` (ex. `2026-10-17T06Z`), `<échéance>` sur deux chiffres (`03`).

@@ -75,9 +75,10 @@ def nebulosite_totale(bas, moyen, haut):
 
 
 def fraction_neige(d_neige, d_total):
-    """Δneige / Δtotal si Δtotal > 0,05 mm, sinon 0 (NaN conservé là où l'entrée est NaN)."""
+    """Δneige / Δtotal si Δtotal > 0,05 mm, sinon 0, bornée à [0,1] (NaN conservé là où l'entrée est NaN)."""
     with np.errstate(invalid="ignore", divide="ignore"):
         f = np.where(d_total > SEUIL_NEIGE_MM, d_neige / np.where(d_total > 0, d_total, 1.0), 0.0)
+    f = np.clip(f, 0.0, 1.0)   # les cumuls GRIB ont un pas de codage : Δneige peut être légèrement < 0 ou > Δtotal
     return np.where(np.isnan(d_total) | np.isnan(d_neige), np.nan, f)
 
 

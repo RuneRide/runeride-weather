@@ -71,7 +71,7 @@ def np_egal(a, b):
     return a.shape == b.shape and bool(np.all(a == b))
 
 
-def traiter(model, run, steps, src, telecharger, out, dossier_dl=None, jouer=print, bornes=True):
+def traiter(model, run, steps, src, telecharger, out, dossier_dl=None, jouer=print, bornes=True, connexions=download.MAX_CONNEXIONS):
     """Produit les .npz canoniques. Retourne la liste des chemins écrits."""
     run_txt, run_dir = lire_run(run)
     stats = {"modele": model, "tirage": run_txt, "telechargement": [], "decodage": [], "echeances": []}
@@ -79,7 +79,7 @@ def traiter(model, run, steps, src, telecharger, out, dossier_dl=None, jouer=pri
     dossier_dl = dossier_dl or os.path.join("out", "grib", model, run_txt)
     t0 = time.time()
     if telecharger:
-        fichiers = download.telecharger(model, besoins, run_txt, src, dossier_dl)
+        fichiers = download.telecharger(model, besoins, run_txt, src, dossier_dl, connexions)
         stats["telechargement"] = [{"fichier": os.path.basename(c), **{k: v for k, v in m.items() if k != "fichier"}}
                                    for c, m in fichiers.values()]
     else:
@@ -131,13 +131,14 @@ def main(argv=None):
     p.add_argument("--src", nargs="+", default=[], help="dossier(s) de GRIB locaux (recherche récursive)")
     p.add_argument("--download", action="store_true", help="télécharger les fichiers absents (3 connexions max)")
     p.add_argument("--dl-dir", default=None, help="où écrire les téléchargements (défaut out/grib/<modèle>/<tirage>)")
+    p.add_argument("--connexions", type=int, default=download.MAX_CONNEXIONS, help="connexions simultanées (3 au plus)")
     p.add_argument("--out", default="out/canon")
     p.add_argument("--sans-bornes", action="store_true",
                    help="ne borne pas rh2m à 0..100 (nécessaire pour reproduire exactement la fixture du contrat)")
     a = p.parse_args(argv)
     if not a.src and not a.download:
         p.error("il faut --src et/ou --download")
-    traiter(a.model, a.run, lire_echeances(a.steps), a.src, a.download, a.out, a.dl_dir, bornes=not a.sans_bornes)
+    traiter(a.model, a.run, lire_echeances(a.steps), a.src, a.download, a.out, a.dl_dir, bornes=not a.sans_bornes, connexions=a.connexions)
     return 0
 
 
