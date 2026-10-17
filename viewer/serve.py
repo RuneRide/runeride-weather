@@ -4,7 +4,7 @@
 
 - sert la page (dossier viewer/) à la racine ;
 - monte out/tiles sous /data/ (et, si présents, out/tiles-synth sous /data-synth/,
-  out/tiles-synth-sans sous /data-sans/, out/tiles-synth-brute sous /data-brute/) ;
+  out/tiles-reduit sous /data-reduit/ (profil de poids reduit), out/tiles-synth-sans sous /data-sans/, out/tiles-synth-brute sous /data-brute/) ;
 - gère les requêtes HTTP Range (206, 416) indispensables à PMTiles, et sert les
   .pmtiles en application/octet-stream ;
 - /<montage>/index.json : inventaire dynamique {modèle: {tirage: {variable: [échéances]}}}
@@ -27,6 +27,7 @@ RACINE = os.path.dirname(os.path.abspath(__file__))
 DEPOT = os.path.dirname(RACINE)
 MONTAGES = {
     "/data": os.path.join(DEPOT, "out", "tiles"),
+    "/data-reduit": os.path.join(DEPOT, "out", "tiles-reduit"),
     "/data-synth": os.path.join(DEPOT, "out", "tiles-synth"),
     "/data-sans": os.path.join(DEPOT, "out", "tiles-synth-sans"),
     "/data-brute": os.path.join(DEPOT, "out", "tiles-synth-brute"),

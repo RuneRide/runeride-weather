@@ -7,7 +7,7 @@ const PAS = 58; // espacement des flèches, en pixels CSS
 
 export class Surcouche {
   constructor(canvas, map) {
-    this.c = canvas; this.map = map; this.ctx = canvas.getContext('2d');
+    this.c = canvas; this.map = map; this.ctx = canvas.getContext('2d', { willReadFrequently: true });
     this.planifie = false;
   }
   redimensionner() {
@@ -26,7 +26,7 @@ export class Surcouche {
   dessiner({ couche, urlA, urlB, mix, zoneZ, zmin, point, fleches }) {
     const ctx = this.ctx;
     if (!this.w) this.redimensionner();
-    ctx.clearRect(0, 0, this.w, this.h);
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, this.c.width, this.c.height); ctx.restore();
     let nb = 0;
     if (fleches && couche && couche.fleches && urlA) {
       ctx.lineWidth = 1.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';

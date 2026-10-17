@@ -17,6 +17,7 @@ class Profil:
     zmax: dict = field(default_factory=dict)         # variable -> zoom maximal stocké
     no_border_from: int = 99           # zoom à partir duquel la tuile est stockée en 256 px (0 bordure)
     levels: dict = field(default_factory=dict)       # variable -> nombre d'intervalles (254 = contrat)
+    ranges: dict = field(default_factory=dict)       # variable -> (min, max) resserrée (défaut : table du contrat)
     lossy: dict = field(default_factory=dict)        # variable -> qualité WebP avec perte (tuiles sans trou seulement)
 
 
@@ -48,6 +49,17 @@ PROFILS["reduit"] = Profil(
     "reduit", "RECOMMANDÉ : reduit-z8 + zoom 8 conservé seulement pour precip_rate et snow_fraction",
     wind_mode="wind8", wind_vmax=48.0, levels=_PAS_GROS,
     zmax={v: 7 for v in ("t2m", "gust10", "rh2m", "cloud_total", "cape", "wind10")})
+
+
+# reduit2 : t2m et rafale à 0,25 (254 niveaux sur 63,5 K / 63,5 m/s). La plage de t2m, resserrée, est
+# propre à la saison : reduit2 (automne/printemps, -30..+33,5 degC), reduit2-ete (-15..+48,5), reduit2-hiver (-40..+23,5).
+_L2 = dict(_PAS_GROS, t2m=254, gust10=254)
+_Z7 = {v: 7 for v in ("t2m", "gust10", "rh2m", "cloud_total", "cape", "wind10")}
+for _nom, _t0 in (("reduit2", 243.15), ("reduit2-ete", 258.15), ("reduit2-hiver", 233.15)):
+    PROFILS[_nom] = Profil(
+        _nom, "reduit + t2m pas 0,25 K sur [%.2f, %.2f] K, gust10 pas 0,25 m/s sur [0, 63,5]" % (_t0, _t0 + 63.5),
+        wind_mode="wind8", wind_vmax=48.0, levels=_L2, zmax=_Z7,
+        ranges={"t2m": (_t0, _t0 + 63.5), "gust10": (0.0, 63.5)})
 
 
 def get(nom):

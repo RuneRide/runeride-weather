@@ -25,8 +25,9 @@ uniform sampler2D u_pal;    // rampe 256x1 RGBA
 uniform vec4 u_uv;          // sous-rectangle de la tuile de données couvert par ce quad (repli sur un parent)
 uniform float u_mix;        // 0 = échéance A, 1 = échéance B
 uniform int u_hasB;
-uniform int u_wind;         // 0 = scalar8, 1 = wind12
+uniform int u_wind;         // 0 = scalar8, 1 = wind12, 2 = wind8 (profil reduit)
 uniform int u_sqrt;         // échelle racine carrée (scalar8)
+uniform float u_quant, u_levels;   // pas de quantification et nombre d'intervalles (métadonnées PMTiles)
 uniform float u_min, u_max, u_mul, u_add, u_lo, u_hi, u_seuil, u_opacite, u_border;
 uniform int u_palsqrt;
 uniform int u_ignorebord;   // 1 = ignore la bordure (clamp aux bords utiles) : émule des tuiles sans bordure, pour mesurer la couture
@@ -38,6 +39,11 @@ const float T = 256.0;
 // Décode un texel en valeur physique. Renvoie false si code 0 (pas de donnée).
 bool decode(vec3 rgb, out vec2 v) {
   vec3 c = floor(rgb * 255.0 + 0.5);
+  if (u_wind == 2) {   // wind8 : u dans R, v dans G, B inutilisé ; 0 = pas de donnée
+    if (c.r < 0.5 || c.g < 0.5) return false;
+    v = (c.rg - 1.0) / 254.0 * 2.0 * u_max - u_max;
+    return true;
+  }
   if (u_wind == 1) {
     if (c.r + c.g + c.b < 0.5) return false;
     float gh = floor(c.g / 16.0);
@@ -47,8 +53,8 @@ bool decode(vec3 rgb, out vec2 v) {
     return true;
   }
   if (c.r < 0.5) return false;
-  float f = (c.r - 1.0) / 254.0;
-  v = vec2(u_sqrt == 1 ? u_min + (u_max - u_min) * f * f : u_min + (u_max - u_min) * f, 0.0);
+  float fl = (c.r - 1.0) / u_levels;
+  v = vec2(u_sqrt == 1 ? u_min + (u_max - u_min) * fl * fl : u_min + (c.r - 1.0) * u_quant, 0.0);
   return true;
 }
 
@@ -78,7 +84,7 @@ void main() {
   bool okB = (u_hasB == 1) && lire(u_b, s, b);
   if (!okA && !okB) discard;
   vec2 v = (okA && okB) ? mix(a, b, u_mix) : (okA ? a : b);   // mélange temporel (vent : sur u et v)
-  float x = (u_wind == 1) ? length(v) : v.x;
+  float x = (u_wind > 0) ? length(v) : v.x;
   float d = x * u_mul + u_add;
   if (d < u_seuil) discard;
   float t = clamp((d - u_lo) / (u_hi - u_lo), 0.0, 1.0);
@@ -136,7 +142,7 @@ export class CoucheDonnees {
     this.prog = prog;
     this.u = {};
     for (const n of ['u_matrix', 'u_rect', 'u_a', 'u_b', 'u_pal', 'u_uv', 'u_mix', 'u_hasB', 'u_wind', 'u_sqrt', 'u_min', 'u_max',
-      'u_mul', 'u_add', 'u_lo', 'u_hi', 'u_seuil', 'u_opacite', 'u_border', 'u_palsqrt', 'u_debug', 'u_ignorebord']) this.u[n] = gl.getUniformLocation(prog, n);
+      'u_mul', 'u_add', 'u_lo', 'u_hi', 'u_seuil', 'u_opacite', 'u_border', 'u_palsqrt', 'u_debug', 'u_ignorebord', 'u_quant', 'u_levels']) this.u[n] = gl.getUniformLocation(prog, n);
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     this.vbo = gl.createBuffer();
@@ -193,9 +199,11 @@ export class CoucheDonnees {
     }
     const U = this.u;
     gl.uniform1i(U.u_a, 0); gl.uniform1i(U.u_b, 1); gl.uniform1i(U.u_pal, 2);
-    gl.uniform1i(U.u_wind, c.enc === 'wind12' ? 1 : 0);
-    gl.uniform1i(U.u_sqrt, c.echelle === 'sqrt' ? 1 : 0);
-    gl.uniform1f(U.u_min, c.min); gl.uniform1f(U.u_max, c.max);
+    const D = c.dec;
+    gl.uniform1i(U.u_wind, D.enc === 'wind12' ? 1 : D.enc === 'wind8' ? 2 : 0);
+    gl.uniform1i(U.u_sqrt, D.echelle === 'sqrt' ? 1 : 0);
+    gl.uniform1f(U.u_min, D.min); gl.uniform1f(U.u_max, D.max);
+    gl.uniform1f(U.u_quant, D.quant); gl.uniform1f(U.u_levels, D.levels);
     gl.uniform1f(U.u_mul, c.aff.mul); gl.uniform1f(U.u_add, c.aff.add);
     gl.uniform1f(U.u_lo, c.legende.lo); gl.uniform1f(U.u_hi, c.legende.hi);
     gl.uniform1i(U.u_palsqrt, c.legende.axe === 'sqrt' ? 1 : 0);

@@ -80,7 +80,7 @@ export function demanderTuile(urlFichier, z, x, y, couche) {
   const cle = `${urlFichier}|${z}/${x}/${y}`;
   let e = cache.get(cle);
   if (e) { toucher(cle, e); return e; }
-  e = { etat: 'charge', cle, canaux: couche.enc === 'wind12' ? 3 : 1, vu: 0 };
+  e = { etat: 'charge', cle, canaux: couche.dec.enc === 'scalar8' ? 1 : 3, vu: 0 };
   cache.set(cle, e);
   stats.requetesTuiles++;
   const t0 = performance.now();
@@ -125,10 +125,11 @@ function bilineaire(e, couche, fx, fy) {
     const i = (cl(y0 + dy) * T + cl(x0 + dx)) * e.canaux;
     if (e.canaux === 3) {
       if (!e.px[i] && !e.px[i + 1] && !e.px[i + 2]) return null;
-      val.push(decoderVent(e.px[i], e.px[i + 1], e.px[i + 2]));
+      if (couche.dec.enc === 'wind8' && (!e.px[i] || !e.px[i + 1])) return null;
+      val.push(decoderVent(e.px[i], e.px[i + 1], e.px[i + 2], couche.dec));
     } else {
       if (!e.px[i]) return null;
-      val.push([decoderScalaire(e.px[i], couche)]);
+      val.push([decoderScalaire(e.px[i], couche.dec)]);
     }
   }
   const n = val[0].length, out = [];

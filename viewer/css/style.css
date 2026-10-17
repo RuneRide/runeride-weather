@@ -69,3 +69,6 @@ h1 small { font-weight: 400; color: var(--discret); font-size: 12px; margin-left
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 .maplibregl-ctrl-bottom-right, .maplibregl-ctrl-bottom-left { display: none; }
+
+/* ?ui=0 : carte seule (captures comparatives) */
+.sans-ui #haut, .sans-ui #info, .sans-ui #legende, .sans-ui #bas { display: none; }

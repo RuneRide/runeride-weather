@@ -240,3 +240,66 @@ Conclusions : (1) le **plus proche voisin est pire** à tous les zooms (erreur m
 - `wind8` est un nouvel encodage (u en R, v en G, B = 0) : **hors contrat**, à valider avec la visualisation (le contrat n'est pas modifié).
 - Échéances HD 19 à 51 non mesurées (ingestion arrêtée à 18).
 - Seuils d'affichage (0,5 K, 1 %, 0,5 m/s) et plage de vent ±48 m/s : hypothèses.
+
+## Profil reduit2
+
+Demande de la visualisation (banding de t2m à 0,5 K et grain des rafales faibles). `--profil reduit2` = `reduit` avec **t2m à 0,25 K** et **gust10 à 0,25 m/s** ; vent `wind8` ±48 m/s, plafond z7, niveaux de rh2m/cloud_total (1 %), bordure et WebP sans perte identiques. Le décodage reste `v = min + (code − 1) × quant_step` ; les métadonnées portent la plage propre au profil (`min`, `max`, `levels`, `quant_step`), le décodeur de référence les lit.
+
+### Plages retenues (254 intervalles, codes 1 à 255)
+
+À 0,25 de pas, 8 bits couvrent **63,5 unités** : la plage de t2m du contrat (100 K) ne tient pas, elle est resserrée.
+
+| Variable | Plage `reduit2` | Pas | Justification |
+|---|---|---|---|
+| t2m | **243,15 à 306,65 K** (−30 à +33,5 °C) | 0,25 K (mesuré dans les métadonnées : 0,25) | centre d'automne/printemps |
+| gust10 | **0 à 63,5 m/s** (et non 63,75 : 254 intervalles de 0,25) | 0,25 m/s | la plage du contrat était 0 à 64 |
+
+Valeurs réelles mesurées (min / max sur toutes les échéances disponibles) :
+
+| Jeu | Échéances | t2m min / max | gust10 max |
+|---|---|---|---|
+| AROME HD 06Z | **19 (0-18 ; 19-51 absentes de out/canon)** | 257,31 K (−15,8 °C) / 303,95 K (30,8 °C) | 28,18 m/s |
+| AROME 06Z | 52 (0-51) | 259,72 K (−13,4 °C) / 303,80 K (30,7 °C) | 36,81 m/s |
+
+Aucun écrêtage : le tuilage compte les pixels hors plage (`pixels_ecretes`) : **0** sur les 148 fichiers HD et les 412 fichiers AROME. Marge : 14,2 K sous le minimum et 2,7 K au-dessus du maximum pour t2m (le maximum est la contrainte : +30,8 °C d'un jour d'octobre, plage limitée à +33,5 °C) ; 26,7 m/s de marge pour la rafale.
+
+**Extrêmes d'une autre saison** : la plage tient dans la métadonnée de chaque fichier, mais un été caniculaire (jusqu'à +45 °C) dépasse +33,5 °C et un hiver rigoureux descend sous −30 °C. Trois profils à plage décalée sont fournis, **même poids, même décodage** : `reduit2` (−30 à +33,5 °C), `reduit2-ete` (−15 à +48,5 °C), `reduit2-hiver` (−40 à +23,5 °C). Proposition : choisir le profil par saison dans le pipeline (ou, mieux, une plage glissante : minimum du tirage arrondi, décidée à l'ingestion), le client lisant toujours `min`/`max` dans le PMTiles ; ne jamais coder la plage en dur côté client. Les rafales à 63,5 m/s ne sont pas écrêtées en pratique (record français ~ 60 m/s en altitude). Un écrêtage éventuel est compté dans `pixels_ecretes` du rapport JSON (`--json`) et devrait déclencher une alerte.
+
+### Mesures (`out/tiles-reduit2/`)
+
+| Jeu | Fichiers | Poids total (octets décimaux) | Par échéance | Temps (20 cœurs) |
+|---|---|---|---|---|
+| HD 06Z, échéances 0-18 | 148 | **191 249 167** (191,2 Mo) | 10,07 Mo (6,0 à 11,4) | 44,1 s (2,32 s/éch.) |
+| AROME 06Z, échéances 0-51 | 412 | **444 475 113** (444,5 Mo) | 8,55 Mo (5,5 à 9,0) | 89,1 s (1,71 s/éch.) |
+
+Sur 19 échéances HD, t2m passe de 17,1 Mo (`reduit`) à 23,2 Mo et gust10 de 19,7 à 26,1 Mo.
+
+**Tirage complet HD + AROME, 52 échéances** (AROME mesuré ; HD **ESTIMATION** : 19 échéances mesurées, 33 extrapolées : 6,0 + 51 × 10,07 Mo) :
+
+| Profil | HD | AROME | Total |
+|---|---|---|---|
+| `contrat` | ≈ 2,1 Go | 0,721 Go (mesuré) | ≈ 2,8 Go (annoncé 2,87) |
+| `reduit` | ≈ 0,49 Go | 0,414 Go (mesuré) | ≈ 0,90 Go (annoncé 0,92) |
+| `reduit2` | **≈ 0,52 Go** | **0,444 Go** (mesuré) | **≈ 0,97 Go** |
+
+`reduit2` pèse donc ≈ 7 % de plus que `reduit` (+0,07 Go par tirage) et ≈ 34 % du `contrat`.
+
+### Erreur de relecture (200 points aléatoires valides, z7)
+
+| Jeu | Variable | Plage / pas dans les métadonnées | Au centre du pixel de tuile (max / moy) | À position quelconque (max / moy) |
+|---|---|---|---|---|
+| HD 03 | t2m | 243,15–306,65 / 0,25 | **0,1249 / 0,0636 K** | 0,454 / 0,058 K |
+| HD 03 | gust10 | 0–63,5 / 0,25 | **0,1245 / 0,0613 m/s** | 0,374 / 0,057 m/s |
+| AROME 30 | t2m | idem | **0,1249 / 0,0663 K** | 0,369 / 0,056 K |
+| AROME 30 | gust10 | idem | **0,1248 / 0,0667 m/s** | 0,215 / 0,052 m/s |
+
+Au centre du pixel (quantification et tuilage seuls) l'erreur est ≤ demi-pas (0,125) partout. À une position quelconque le maximum dépasse le demi-pas : c'est l'erreur de double interpolation déjà analysée (aux fronts), pas de la quantification.
+
+### Tests ajoutés
+
+`tests/tiling/test_profils.py::TestReduit2` (3 tests, 29 au total, tous passent) : pas et plages des trois profils, aller-retour sur plage resserrée avec écrêtage aux bornes (codes 1 et 255, jamais 0), tuilage `reduit2` de la fixture avec relecture ≤ demi-pas (0,125) et 0 pixel écrêté.
+
+### Points ouverts
+
+- Échéances HD 19 à 51 toujours absentes de `out/canon/arome-hd/` : poids HD du tirage `reduit2` extrapolé.
+- Choix automatique de la plage de t2m (saison ou minimum du tirage) à décider ; le client doit lire `min`/`max` dans les métadonnées.

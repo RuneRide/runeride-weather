@@ -61,6 +61,49 @@ class TestEncodages(unittest.TestCase):
         self.assertEqual(E.encode_scalar8(np.array([np.nan]), "t2m", 100)[0], 0)
 
 
+class TestReduit2(unittest.TestCase):
+    def test_metadonnees_et_pas(self):
+        for nom, t0 in (("reduit2", 243.15), ("reduit2-ete", 258.15), ("reduit2-hiver", 233.15)):
+            pr = P.get(nom)
+            self.assertEqual(pr.levels["t2m"], 254)
+            self.assertEqual(pr.ranges["t2m"], (t0, t0 + 63.5))
+            self.assertAlmostEqual(E.scalar_step("t2m", 254, pr.ranges["t2m"]), 0.25)
+            self.assertAlmostEqual(E.scalar_step("gust10", 254, pr.ranges["gust10"]), 0.25)
+            self.assertEqual(pr.wind_mode, "wind8")
+            self.assertEqual(pr.zmax["t2m"], 7)
+
+    def test_aller_retour_plage_resserree_et_ecretage(self):
+        rg = (243.15, 306.65)
+        v = RNG.uniform(rg[0], rg[1], 100000)
+        c = E.encode_scalar8(v, "t2m", 254, rg)
+        self.assertLessEqual(c.max(), 255)
+        err = np.abs(E.decode_scalar8(c, "t2m", 254, rg) - v).max()
+        self.assertLessEqual(err, 0.125 + 1e-3)
+        c = E.encode_scalar8(np.array([200.0, 400.0, np.nan]), "t2m", 254, rg)
+        self.assertEqual(list(c), [1, 255, 0])      # écrêtage aux bornes, jamais 0
+
+    def test_construction_reduit2_relecture(self):
+        d = tempfile.mkdtemp(prefix="tuilage_r2_")
+        try:
+            src = dict(np.load(FIXTURE))
+            grid = Grid(src["lat"], src["lon"])
+            rep = B.build(FIXTURE, d, zooms=(6, 7), workers=4, variables=["t2m", "gust10"], profil=P.get("reduit2"))
+            self.assertTrue(all(r["pixels_ecretes"] == 0 for r in rep))
+            for var in ("t2m", "gust10"):
+                with TileFile(os.path.join(d, "arome-hd", "2026-10-17T06Z", var, "03.pmtiles")) as t:
+                    self.assertAlmostEqual(t.meta["quant_step"], 0.25)
+                    self.assertEqual(t.meta["levels"], 254)
+                    for x, y in tiles_covering(*grid.bounds, 7):
+                        lon, lat = pixel_lonlat(7, x, y)
+                        r = grid.sample(src[var], lon, lat)
+                        g = t.read(7, x, y)
+                        ok = np.isfinite(r)
+                        np.testing.assert_array_equal(np.isfinite(g), ok)
+                        self.assertLessEqual(np.abs(g - r)[ok].max(), 0.125 + 1e-3)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 class TestConstruction(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

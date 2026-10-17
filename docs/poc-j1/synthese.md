@@ -97,3 +97,39 @@ Avec le profil `reduit`, mon décodeur (formule du contrat, `min + (code−1)/25
 - Rejouer HD 06Z 19-51 quand SP1 sera publié ; comprendre pourquoi il ne l'est pas.
 - Expliquer les 38-40 % de précipitations « non neige » entre −2 et 0 °C ; confronter les valeurs extrêmes à une autre source.
 - Mesures sur un vrai téléphone en 4G ; particules de vent ; sélecteur de modèle ; manifest ; fond de carte.
+
+---
+
+# Étape 3 : profil de poids retenu (17 octobre 2026, fin d'après-midi)
+
+## Verdict
+
+**Adopter le profil `reduit2`** (décision D13 tranchée). Poids mesuré d'un tirage complet de 52 échéances : **0,99 Go** (HD 0,545 + AROME 0,444), soit **65 % de moins que `contrat` (2,87 Go)** et 7,6 % de plus que `reduit` (0,92 Go), pour une qualité visuelle meilleure sur la température et les rafales.
+
+## Comparaison visuelle `contrat` contre `reduit` (agent visualisation, WebGL logiciel, seuil de ΔE > 2,3)
+
+- **France entière** : 0,1 à 2,5 % de pixels au-dessus du seuil, aucune différence nette ; pluie, neige et CAPE à z6 identiques au pixel.
+- **Zooms Alpes, Provence, front de nuages** : 1 à 11 % de pixels au-dessus du seuil de perception, 0,2 à 0,7 % nettement ; coutures à 1-2 niveaux.
+- **À l'œil** : le banding de la température est perceptible dans les zones lisses (un peu plus net à 0,5 K qu'à 0,39 K) ; le grain des rafales faibles est visible ; le plafond z7 se voit sur les contours de la CAPE ; le reste ne se voit pas. D'où l'ajustement `reduit2`.
+- **Octets** (vent, `contrat` → `reduit`) : à l'ouverture 3,42 → 1,08 Mo (bureau), 0,91 → 0,35 Mo (mobile émulé) ; frise 0-51 h entière 93,9 → 29,4 Mo (bureau), 21,5 → 8,4 Mo (mobile). Rapporté, non rejoué.
+
+## `reduit2` : paramètres
+
+Identique à `reduit` (vent `wind8` ±48 m/s, `rh2m` et `cloud_total` au pas de 1 %, zoom maximal 7 sauf `precip_rate` et `snow_fraction` à 8) sauf **`t2m` au pas de 0,25 K** (plage 243,15 à 306,65 K, soit −30 à +33,5 °C) et **`gust10` au pas de 0,25 m/s** (plage 0 à 63,5 m/s).
+
+| Contrôle | Résultat |
+|---|---|
+| Poids **mesuré**, tirage complet (HD 03Z 52 échéances + AROME 06Z 52 échéances) | **0,990 Go** (412 + 412 fichiers) ; HD 0,545 Go en 1 min 59, AROME 0,444 Go |
+| Valeurs réelles des tirages | `t2m` −15,8 à +30,8 °C (HD), −13,4 à +30,7 °C (AROME) ; `gust10` max 36,8 m/s ; **aucun pixel écrêté sur 560 fichiers** (rapporté) |
+| Vent réel | vitesse moyenne max 25,5 m/s (HD 25,3, AROME 25,5), \|u\|, \|v\| max 25,4 : loin de l'écrêtage de ±48 (**recontrôlé**) |
+| Précision de relecture à 200 points | centre de pixel : 0,125 pour `t2m` et `gust10` (= demi-pas) ; position quelconque : 0,45 K et 0,37 m/s (double interpolation) (rapporté) |
+
+## Limite importante : une plage fixe ne couvre pas toutes les saisons
+
+Une plage de 63,5 K en 254 niveaux à 0,25 K ne couvre ni les canicules (au-dessus de 33,5 °C, courantes en été en France) ni les grands froids (sous −30 °C). L'agent a ajouté `reduit2-ete` (−15 à +48,5 °C) et `reduit2-hiver` (−40 à +23,5 °C), mais le plus robuste est une **plage propre à chaque fichier** : `min` choisi d'après les données de l'échéance (par exemple `min = tmin − 1 K`), pas fixe à 0,25 K ; l'écart réel d'un champ sur la France (≈ 47 K ce jour-là) tient dans 63,5 K. Le client lit déjà `min` et `quant_step` dans les métadonnées, donc **aucun changement côté visualisation**. Décision D14.
+
+## Conséquences
+
+1. Adopter `reduit2` avec plage dynamique par fichier (D13 révisée, D14) ; revoir le poids d'un tirage sur un tirage d'été.
+2. La visualisation décode `quant_step` pour `contrat` et `reduit`, mais **`?profil=reduit2` n'est pas encore prévu** ; à ajouter avec l'intégration du fond de carte.
+3. `wind8` : validé sur un seul tirage (le vent moyen max est 25,5 m/s) ; à rejouer sur un tirage de tempête.

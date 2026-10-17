@@ -101,7 +101,7 @@ Météo-France (S3 public, GRIB2, 8 tirages/jour)
 - **Bordure de 1 px recouvrante** entre tuiles pour éviter les coutures de l'interpolation bilinéaire (DÉCISION à valider au PoC).
 - Charge utile : **WebP sans perte** (ou PNG), valeurs quantifiées en canaux de couleur, **sans canal alpha de données** (la pré-multiplication du navigateur corromprait les valeurs) ; décodage avec `premultiplyAlpha: 'none'`.
 - **Code 0 réservé = « pas de donnée »** (points masqués) ; la plage utile est codée de 1 à 255 (8 bits) ou 1 à 65 535 (16 bits).
-- Mesuré : température 8 bits en pleine grille HD = 0,62 Mo en WebP sans perte ; vent u/v sur 4 canaux 16 bits = 8,4 Mo en PNG avant masquage, ce qui est trop lourd : d'où le codage 24 bits (RVB) du §5.2, à re-mesurer. **Mesuré au PoC J1 sur des tirages complets de 52 échéances** (WebP sans perte) : profil `contrat` **2,15 Go en HD + 0,72 Go en AROME = 2,87 Go par tirage** ; profil `reduit` (vent 8 bits, pas de quantification plus gros, zoom maximal 7 sauf pluie et neige) **0,51 + 0,41 = 0,92 Go par tirage** (−68 %) ; soit pour 3 tirages conservés **≈ 8,6 Go** ou **≈ 2,8 Go**. Le vent pèse 46 % en `contrat`. **DÉCISION D13** : adopter `reduit` en production après validation visuelle de `wind8`. Détails : [poc-j1/synthese.md](poc-j1/synthese.md).
+- Mesuré : température 8 bits en pleine grille HD = 0,62 Mo en WebP sans perte ; vent u/v sur 4 canaux 16 bits = 8,4 Mo en PNG avant masquage, ce qui est trop lourd : d'où le codage 24 bits (RVB) du §5.2, à re-mesurer. **Mesuré au PoC J1 sur des tirages complets de 52 échéances** (WebP sans perte) : profil `contrat` **2,15 Go en HD + 0,72 Go en AROME = 2,87 Go par tirage** ; profil `reduit` (vent 8 bits, pas de quantification plus gros, zoom maximal 7 sauf pluie et neige) **0,51 + 0,41 = 0,92 Go par tirage** (−68 %) ; soit pour 3 tirages conservés **≈ 8,6 Go** ou **≈ 2,8 Go**. Le vent pèse 46 % en `contrat`. **DÉCISION D13 tranchée (17/10)** : adopter le profil **`reduit2`** (`reduit` avec `t2m` et `gust10` au pas de 0,25), **0,99 Go par tirage** mesuré (HD 0,545 + AROME 0,444), soit 65 % de moins que `contrat`. Détails : [poc-j1/synthese.md](poc-j1/synthese.md).
 
 ### 5.2 Quantification
 
@@ -242,7 +242,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | Disponibilité | interface statique ; en cas d'échec d'un tirage, le précédent reste servi | DÉCISION |
 | Reprise sur erreur | téléchargements repris, somme de contrôle de taille, nouvel essai, alerte si aucun nouveau tirage depuis 6 h | DÉCISION |
 | Coût | ordre de grandeur de quelques euros à quelques dizaines d'euros par mois, dominé par la diffusion ; à chiffrer au jalon J5 | ESTIMATION |
-| Stockage | **≈ 8,6 Go** (profil `contrat`) ou **≈ 2,8 Go** (profil `reduit`) pour 3 tirages (§5.1) | MESURÉ sur des tirages complets |
+| Stockage | **≈ 3,0 Go** (profil `reduit2`, retenu) ou ≈ 8,6 Go (profil `contrat`) pour 3 tirages (§5.1) | MESURÉ sur des tirages complets |
 | Calcul | décodage 0,43 s pour 6 champs HD (mesuré) ; un tirage complet en 15 à 25 min sur 1 cœur, quelques minutes en parallèle | ESTIMATION |
 | Vie privée | position et trace ne servent qu'à répondre ; aucun traceur, aucune mesure d'audience tierce ; journaux sans coordonnées précises | DÉCISION |
 | **Service public : maîtrise du coût** | budget AWS avec alarmes et plafond, cache CDN long sur les tuiles (immuables par tirage), diffusion en `Range`, limitation de débit sur l'API point / itinéraire, quota de requêtes par IP | DÉCISION |
@@ -312,4 +312,5 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | D10 | Architecture multi-modèles : adaptateur par source, contrat de variables canoniques, manifest par modèle (v1 : AROME et HD seulement, mais le contrat est écrit dès le départ) | oui |
 | D11 | Couche de base Europe : ARPEGE 0,1° en premier, puis ICON-D2, hors v1 | oui |
 | D12 | Très court terme : AROME-PI via l'API WCS de Météo-France, jeton dans Secrets Manager ; PIAF exclu tant que sa licence n'est pas confirmée | oui, après création du compte |
-| D13 | Profil de poids de production : `reduit` (0,92 Go par tirage au lieu de 2,87 Go), après validation visuelle de `wind8` ; règle de décodage unique `min + (code−1) × quant_step` | oui, après adaptation de la visualisation |
+| D13 | Profil de poids de production : **`reduit2`** (0,99 Go par tirage au lieu de 2,87 Go) ; règle de décodage unique `min + (code−1) × quant_step` | **tranchée le 17/10** |
+| D14 | Plage de `t2m` et `gust10` **propre à chaque fichier** (même pas de 0,25), `min` calculé d'après les données, pour couvrir toutes les saisons ; le client lit `min` et `quant_step` | oui, à valider sur un tirage d'été |

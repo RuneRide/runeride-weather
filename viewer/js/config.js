@@ -18,6 +18,7 @@ const P = {
     [0.82, [200, 60, 190, 240]], [1, [250, 120, 150, 250]]],
   humidite: [[0, [190, 120, 60, 200]], [0.3, [220, 190, 110, 200]], [0.55, [150, 205, 160, 205]], [0.8, [60, 160, 190, 220]], [1, [30, 70, 160, 235]]],
   nuages: [[0, [235, 235, 240, 0]], [0.15, [225, 228, 235, 40]], [0.6, [205, 210, 222, 140]], [1, [235, 238, 245, 215]]],
+  neige: [[0, [150, 190, 235, 170]], [0.5, [200, 225, 250, 220]], [1, [255, 255, 255, 250]]],
   cape: [[0, [250, 225, 90, 120]], [0.25, [250, 190, 60, 210]], [0.5, [240, 120, 40, 230]], [0.75, [215, 40, 60, 240]], [1, [160, 30, 160, 250]]],
 };
 
@@ -43,6 +44,9 @@ export const COUCHES = [
   { cle: 'humidite', nom: 'Humidité', variable: 'rh2m', enc: 'scalar8', min: 0, max: 100, echelle: 'linear',
     aff: { mul: 1, add: 0, unite: '%', dec: 0 }, legende: { lo: 0, hi: 100, axe: 'linear', ticks: [0, 25, 50, 75, 100] },
     palette: P.humidite, seuil: -1 },
+  { cle: 'neige', nom: 'Neige (part)', variable: 'snow_fraction', enc: 'scalar8', min: 0, max: 1, echelle: 'linear',
+    aff: { mul: 100, add: 0, unite: '% neige', dec: 0 }, legende: { lo: 0, hi: 100, axe: 'linear', ticks: [0, 25, 50, 75, 100] },
+    palette: P.neige, seuil: 10 },
   { cle: 'cape', nom: 'Orages (CAPE)', variable: 'cape', enc: 'scalar8', min: 0, max: 5000, echelle: 'sqrt',
     aff: { mul: 1, add: 0, unite: 'J/kg', dec: 0 }, legende: { lo: 0, hi: 3000, axe: 'sqrt', ticks: [100, 500, 1000, 2000, 3000] },
     palette: P.cape, seuil: 50 },
@@ -71,12 +75,23 @@ export function texturePalette(arrets) {
   return out;
 }
 
-// --- Décodage CPU (miroir exact du shader et du contrat §3) ---
-export function decoderScalaire(code, couche) {
-  const f = (code - 1) / 254;
-  return couche.echelle === 'sqrt' ? couche.max * f * f : couche.min + f * (couche.max - couche.min);
+// --- Décodage CPU (miroir exact du shader et du contrat §3, révision 2) ---
+/** Paramètres de décodage d'une couche : lus dans les métadonnées PMTiles (quant_step, levels, max, encoding),
+ *  repli sur le contrat (254 intervalles, vent wind12 +-64) si une clé manque. */
+export function paramsDecodage(couche, meta) {
+  meta = meta || {};
+  const enc = meta.encoding || couche.enc;
+  const min = meta.min ?? couche.min, max = meta.max ?? couche.max, echelle = meta.scale || couche.echelle;
+  const levels = meta.levels || 254;
+  const quant = meta.quant_step ?? (enc === 'wind8' ? 2 * max / 254 : (max - min) / levels);
+  return { enc, min, max, echelle, levels, quant };
 }
-export function decoderVent(r, g, b) {
+export function decoderScalaire(code, dec) {
+  if (dec.echelle === 'sqrt') { const f = (code - 1) / dec.levels; return dec.min + (dec.max - dec.min) * f * f; }
+  return dec.min + (code - 1) * dec.quant;   // règle unique du contrat (révision 2) : pas lu dans les métadonnées
+}
+export function decoderVent(r, g, b, dec) {
+  if (dec.enc === 'wind8') return [(r - 1) / 254 * 2 * dec.max - dec.max, (g - 1) / 254 * 2 * dec.max - dec.max];
   const cu = (r << 4) | (g >> 4), cv = ((g & 15) << 8) | b;
   return [(cu - 1) / 4094 * 128 - 64, (cv - 1) / 4094 * 128 - 64];
 }

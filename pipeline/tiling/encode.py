@@ -26,17 +26,27 @@ STORED = TILE + 2 * BORDER        # 258
 LEVELS = 254   # nombre d'intervalles du contrat : codes 1..255 ; un profil réduit peut en prendre moins
 
 
-def scalar_step(var, levels=LEVELS):
-    """Pas de quantification (unité physique) ; pour sqrt, pas maximal (en haut de plage)."""
+def _range(var, vrange):
     vmin, vmax, scale, _ = SCALAR8[var]
+    if vrange is not None:
+        vmin, vmax = vrange
+    return vmin, vmax, scale
+
+
+def scalar_step(var, levels=LEVELS, vrange=None):
+    """Pas de quantification (unité physique) ; pour sqrt, pas maximal (en haut de plage).
+
+    vrange : plage (min, max) propre à un profil ; défaut = table du contrat.
+    """
+    vmin, vmax, scale = _range(var, vrange)
     if scale == "linear":
         return (vmax - vmin) / float(levels)
     return vmax * (1 - ((levels - 1) / float(levels)) ** 2)
 
 
-def encode_scalar8(values, var, levels=LEVELS):
+def encode_scalar8(values, var, levels=LEVELS, vrange=None):
     """float32 -> uint8 ; NaN -> 0 ; 1..levels+1 sinon (levels=254 : contrat)."""
-    vmin, vmax, scale, _ = SCALAR8[var]
+    vmin, vmax, scale = _range(var, vrange)
     v = np.asarray(values, dtype=np.float64)
     nan = ~np.isfinite(v)
     f = np.clip((np.where(nan, vmin, v) - vmin) / (vmax - vmin), 0.0, 1.0)
@@ -47,9 +57,9 @@ def encode_scalar8(values, var, levels=LEVELS):
     return code.astype(np.uint8)
 
 
-def decode_scalar8(codes, var, levels=LEVELS):
+def decode_scalar8(codes, var, levels=LEVELS, vrange=None):
     """uint8 -> float32 ; 0 -> NaN."""
-    vmin, vmax, scale, _ = SCALAR8[var]
+    vmin, vmax, scale = _range(var, vrange)
     c = np.asarray(codes, dtype=np.float64)
     f = (c - 1) / float(levels)
     if scale == "sqrt":

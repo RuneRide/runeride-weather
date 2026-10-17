@@ -67,3 +67,78 @@ Objectif de la spécification (≤ 1,5 Mo à l'ouverture sur la vue France) : at
 - Mesure sur vrai téléphone et en 4G ; limite de mémoire du cache (360 tuiles décodées, ~20 à 90 Mo) à valider sur appareil.
 - Zoom de données et poids à l'ouverture sur grand écran (voir §3) ; décodage WebP sur le fil principal (46 ms en moyenne par tuile) à déplacer dans un worker si besoin.
 - Précision en haut de zoom : le zoom maximal est limité à 10,5 pour la précision des matrices en flottants 32 bits.
+
+## 8. Profil `reduit` (décision D13)
+
+Tout ce qui suit est **mesuré** (Chrome 155 sans interface, WebGL logiciel : aucune conclusion sur les images/s) sauf mention. Tuiles : HD tirage 03Z, 52 échéances, profils `contrat` (`out/tiles`) et `reduit` (`out/tiles-reduit`).
+
+### 8.1 Ce qui a changé dans le viewer
+
+- **Décodage unique** (shader et CPU : valeur au point, flèches) : `v = min + (code − 1) × quant_step` pour les scalaires linéaires, `quant_step` et `levels` lus dans les métadonnées PMTiles (`js/config.js`, `paramsDecodage`) ; `sqrt` : `min + (max−min) × ((code−1)/levels)²` ; **`wind8`** : `u = (R−1)/254 × 2·max − max`, idem `v` avec G, B ignoré, `R = 0` ou `G = 0` = pas de donnée (`max` = 48 lu dans les métadonnées). Repli sur les constantes du contrat si une clé manque (tuiles synthétiques).
+- **Zoom propre à chaque couche** : le zoom maximal vient de l'en-tête PMTiles du fichier de la couche (7 pour t2m, rafales, humidité, nuages, CAPE et vent ; 8 pour pluie et neige) ; au-delà, surzoom côté shader. Nouvelle couche **Neige (part)** (`snow_fraction`).
+- `?profil=contrat|reduit` (le serveur monte `out/tiles-reduit` sous `/data-reduit`), `?run=` ; **tirage par défaut** : celui qui a le plus d'échéances de température (HD 03Z, 52). `?decodage=ancien` force l'ancienne formule min/max ; `?ui=0` masque l'interface (captures comparatives).
+- Au passage : le canvas des flèches est en `willReadFrequently` (le canvas accéléré de Chrome sans interface restituait parfois une image périmée, des flèches de vent restant visibles sur d'autres couches dans les captures).
+
+### 8.2 Décodage contre le décodeur Python de référence (`pipeline/tiling/decode.py`)
+
+120 points aléatoires valides par variable et par profil (France, échéance 24, z7, bilinéaire sur la tuile comme le client), valeur du viewer (décodage CPU dans le navigateur) contre `TileFile.sample`. **Écart maximal** : `contrat` 1,5·10⁻⁵ (t2m), ≤ 6·10⁻⁶ pour les autres ; `reduit` 6·10⁻⁶ (t2m), 5·10⁻⁸ pluie, 4,6·10⁻⁷ vent (wind8), 0 pour la neige : donc égalité à l'arrondi `float32` près, pour les 8 variables (960 points par profil). Shader contre décodage CPU (rendu en niveaux de gris, 80 points) : médiane 0,25 niveau de 8 bits, 95e centile ≤ 0,5 niveau (t2m reduit : 5 niveaux sur ~1 point en 20, aux fortes pentes).
+
+**Non-régression** : décodage `contrat` avec la nouvelle règle contre l'ancienne formule, même vue 1280×800, 8 couches : **images identiques au pixel** (écart 0 sur 8 couches). L'ancienne formule sur `reduit` est fausse sur 99 % des pixels de t2m, vent, rafales, humidité, nuages (écart moyen 24 à 74 niveaux) : la règle `quant_step` est indispensable.
+
+### 8.3 Comparaison visuelle contrat contre reduit
+
+Mêmes vues et échéances : France entière (zoom carte 5, données z6) aux échéances 6, 24, 48 pour les 8 couches ; zooms Alpes (z8,2 et 8,5), Provence, front de nuages au large de la Gironde (45,5°N 2,3°O, échéance 48) ; planches `img/cmp-*.png` (contrat | reduit | différence amplifiée) ; script `viewer/tools/comparer_profils.py`. Seuil : ΔE CIE76 > 2,3 = différence juste perceptible, > 5 = nette. Dénominateur : pixels où la couche change le fond. Exemples (`ventc` = couleur du vent sans les flèches) :
+
+| Vue | Moy. RVB (0-255) | % pixels ΔE > 2,3 | % ΔE > 5 |
+|---|---|---|---|
+| France, t2m (6 / 24 / 48 h) | 0,53 à 0,57 | 0,11 à 0,20 | 0 |
+| France, vent couleur seule | 0,72 à 0,75 | 0,9 à 1,2 | 0 |
+| France, vent avec flèches | 0,80 à 0,86 | 1,5 à 1,8 | 0,23 à 0,30 (flèches) |
+| France, rafales | 0,71 à 0,79 | 1,3 à 2,5 | 0 |
+| France, humidité / nuages | 0,27 / 0,10 à 0,13 | ≤ 0,03 / 0 | 0 |
+| France, pluie, CAPE, neige | 0 | 0 | 0 (même fichier dans les deux profils) |
+| Alpes z8,2 : t2m / vent couleur / rafales | 0,70 / 1,25 / 1,38 | 5,1 / 8,1 / 11,2 | 0,07 / 0,16 / 0,69 |
+| Provence : t2m / vent couleur | 0,63 / 0,93 | 0,9 / 3,7 | 0 / 0,01 |
+| Front de nuages z8,2 | 0,98 | 2,6 | 0,21 |
+| Provence : CAPE z8,2 | 3,2 | 3,7 | 3,65 |
+
+**Ce qui ne se voit pas** : à l'échelle France (z6, identique dans les deux profils sauf quantification) l'écart est un bruit de 1 à 2 niveaux, sans structure ; la différence amplifiée ×20 à ×40 montre du grain, pas de formes. Les flèches : le profil change de très peu leur longueur et leur angle, d'où le 0,3 % de pixels > 5 sur le vent avec flèches, aucun sur la couleur seule. Le surzoom z7 contre z8 de la température, de l'humidité, des nuages et du vent (Alpes z8,2) ne se distingue pas côte à côte ; il ne s'écarte qu'aux limites du relief (5 à 11 % de pixels au-dessus du seuil de perception, 0,07 à 0,7 % nettement). **Bords de nuages** : écart de bord inférieur à 1 pixel d'écran, 0,21 % de pixels nettement différents, invisible sans amplification. **Pluie et neige** : le zoom 8 est conservé, le rendu est strictement identique, y compris le passage z7 à z8 (zoom carte 8,5 : 0 pixel de différence).
+
+**Ce qui se voit, avec effort** : (1) le **banding de la température** : dans les zones lisses (mer, plaines), des contours de paliers sont perceptibles dans les deux profils ; le pas de 0,5 K les rend un peu plus nets que 0,39 K (`img/cmp-banding-t2m.png`). Écart de couleur entre deux paliers consécutifs avec ma palette (médiane / max, calculé, pas mesuré à l'écran) : 2,0 / 2,7 (contrat), **2,6 / 3,5 (reduit)**, donc autour du seuil de perception (2,3) dans les deux cas. L'interpolation bilinéaire dans le shader adoucit la jonction mais pas le palier. (2) Les **rafales** : 0,5 m/s soit 1,8 km/h : ΔE 4,2 médian par palier contre 2,1 ; l'effet visible est du grain dans les rafales faibles (Alpes : 11 % de pixels au-dessus de 2,3). (3) Le vent `wind8` : pas de 0,38 m/s soit 1,4 km/h par composante, ΔE de 4,1 médian pour un palier de vitesse, mais le mélange u/v rend les paliers diffus : aucun contour visible à l'œil sur les captures. (4) CAPE à z7 : le seuil d'affichage à 50 J/kg se déplace d'un pixel de donnée, formes plus empâtées sur les cellules isolées (3,65 % de pixels nettement différents) ; sans conséquence pour l'usage, mais c'est la seule couche où le plafond z7 se voit.
+
+**Coutures** (bordure 1 px conservée, rendu avec puis sans la bordure, zoom carte 9,5 sur la jonction lon 0°) : reduit t2m 288 pixels sur 800 000 (1 niveau, ≈ 0,26 K), vent 1 399 (2 niveaux) ; contrat : 619 et 1 608 ; localisées uniquement sur les colonnes et lignes de jonction ; aucune couture visible à l'œil.
+
+### 8.4 Octets et requêtes
+
+Ouverture (somme des corps Range à la première couche complète : en-têtes + métadonnées + tuiles h et h+1), vue France :
+
+| | contrat | reduit |
+|---|---|---|
+| Bureau 1280×800, vent | 3,42 Mo, 57 requêtes | **1,08 Mo**, 57 requêtes |
+| Bureau, température | 0,55 Mo | 0,50 Mo |
+| Mobile 390×844 (émulé), vent | 0,91 Mo, 15 requêtes | **0,35 Mo**, 15 requêtes |
+| Mobile, température | 0,18 Mo | 0,16 Mo |
+
+Objectif de 1,5 Mo atteint sur les deux écrans avec `reduit` (le vent seul dépassait avec `contrat` sur bureau). Les 15 ou 57 requêtes comprennent 2 en-têtes de 16 ko et 2 lectures de métadonnées ; les tuiles hors emprise n'ont pas de requête.
+
+**Préchargement de toute la frise 0-51 h** (**mesuré** sur les 52 échéances, uniquement les tuiles visibles ; en-têtes de 16 ko par fichier inclus, soit ≈ 0,85 Mo par couche) :
+
+| Couche | Bureau contrat | Bureau reduit | Mobile contrat | Mobile reduit |
+|---|---|---|---|---|
+| Vent | 93,9 Mo | **29,4 Mo** | 21,5 Mo | **8,4 Mo** |
+| Température | 16,2 Mo | 14,6 Mo | 4,2 Mo | 3,8 Mo |
+| Pluie | 9,6 Mo | 9,6 Mo | 3,1 Mo | 3,1 Mo |
+| Nuages | 26,1 Mo | 20,5 Mo | 6,3 Mo | 5,3 Mo |
+
+Soit 1 568 à 1 722 requêtes (bureau) et 329 à 336 (mobile) par couche. **ESTIMATION** (non mesurée) pour la frise d'une couche sur 4G à 10 Mbit/s : 8,4 Mo en 7 s sur mobile avec `reduit` contre 17 s avec `contrat`. Les mesures ne couvrent qu'une vue ; un déplacement ou un zoom ajoute des tuiles. Un fichier par échéance coûte 16 ko d'en-tête ; une lecture groupée des en-têtes ou des répertoires gagnerait 0,85 Mo par couche (non essayé).
+
+### 8.5 Recommandation sur D13 : **oui, adopter `reduit`, avec un ajustement ciblé**
+
+- Gains mesurés : vent 3,2 fois moins d'octets à l'ouverture, 3,2 à 2,6 fois moins pour la frise ; −68 % de poids de stockage (tuilage). Aucune différence visible à l'œil à l'échelle France ni sur les zooms Alpes ou Provence pour le vent, les nuages, l'humidité et les bords de nuages ; couture inchangée.
+- **Ajustement recommandé** : garder des paliers fins là où la palette amplifie le pas : **`t2m` à 0,25 K** (le banding est déjà au seuil de perception à 0,39 K ; le coût en octets de la température est faible : 0,5 Mo à l'ouverture sur bureau) et **`gust10` à 0,25 m/s** (pas du contrat) si le grain des rafales faibles gêne ; ces deux ajustements ne touchent pas le vent, qui porte l'essentiel du gain. Le profil `reduit` actuel reste acceptable si l'on tolère un léger banding de température.
+- **CAPE** : le plafond z7 est acceptable (seule couche où il se voit, aux contours) ; garder z8 uniquement pour la pluie et la neige comme dans `reduit`.
+- Réserve : mesures faites en Chrome sans interface sur machine locale ; pas de test sur téléphone réel ni en 4G ; la validation de `wind8` ne porte que sur le tirage 03Z du 17/10/2026 (conditions calmes à modérées, vitesses < 48 m/s : un vent plus fort serait écrêté à ±48 m/s par composante).
+
+### 8.6 Rejouer
+
+`python3 viewer/serve.py` ; `python3 viewer/tools/comparer_profils.py scenario DOSSIER`, puis `node viewer/tools/pilote_chrome.mjs DOSSIER/scenario-<profil>.json` pour chacun, puis `python3 viewer/tools/comparer_profils.py analyse DOSSIER`. Octets : `?bench=1&profil=…` et `__app.mesurerFrise('vent')`. Décodage : `__app.comparer(points)` (voir §8.2).

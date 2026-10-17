@@ -30,6 +30,7 @@ def _tile_worker(job):
     b = _border(prof, z)
     lon, lat = pixel_lonlat(z, x, y, border=b)
     out = {}
+    clip = 0
     for var in _G["variables"]:
         if z > _G["zmax"][var]:
             continue
@@ -42,12 +43,18 @@ def _tile_worker(job):
             else:
                 arr = E.encode_wind12(u, v, prof.wind_drop_bits)
         else:
-            arr = E.encode_scalar8(grid.sample(fields[var], lon, lat), var, prof.levels.get(var, E.LEVELS))
+            samp = grid.sample(fields[var], lon, lat)
+            rg = prof.ranges.get(var)
+            if rg is not None:    # écrêtage compté (pixels de tuile hors plage resserrée)
+                clip = int(((samp < rg[0]) | (samp > rg[1])).sum())
+            arr = E.encode_scalar8(samp, var, prof.levels.get(var, E.LEVELS), rg)
             if var in prof.lossy and (arr > 0).all():
                 q = prof.lossy[var]    # jamais sur une tuile contenant du « pas de donnée »
         if not arr.any():
             continue   # tuile entièrement « pas de donnée » : non écrite
         out[var] = E.to_webp(arr, lossy_quality=q)
+        if var in prof.ranges:
+            out[var + "#clip"] = clip
     return (z, x, y), out
 
 
@@ -72,8 +79,11 @@ def metadata_for(var, model, run, step, zmin, zmax, prof=P.CONTRAT):
     else:
         vmin, vmax, scale, unit = E.SCALAR8[var]
         lv = prof.levels.get(var, E.LEVELS)
+        rg = prof.ranges.get(var)
+        if rg is not None:
+            vmin, vmax = rg
         md = {"encoding": "scalar8", "min": vmin, "max": vmax, "scale": scale,
-              "unit": unit, "quant_step": E.scalar_step(var, lv), "levels": lv}
+              "unit": unit, "quant_step": E.scalar_step(var, lv, rg), "levels": lv}
         if var in prof.lossy:
             md["lossy_quality"] = prof.lossy[var]
     md["profile"] = prof.nom
@@ -141,13 +151,14 @@ def build(canon_path, out_root, variables=None, zooms=None, workers=None, profil
     report = []
     for var in outs:
         tiles = {k: o[var] for k, o in results if var in o}
+        clipped = sum(o.get(var + "#clip", 0) for _, o in results)
         vzmax = _G["zmax"][var]
         path = os.path.join(out_root, model, run, var, "%s.pmtiles" % step)
         md = metadata_for(var, model, run, step, zmin, vzmax, prof)
         write_pmtiles(path, tiles, md, grid.bounds, zmin, vzmax)
         per_zoom = {z: sum(1 for k in tiles if k[0] == z) for z in range(zmin, vzmax + 1)}
         report.append({"model": model, "run": run, "step": step, "variable": var, "path": path,
-                       "bytes": os.path.getsize(path), "tiles": len(tiles), "profil": prof.nom, "tiles_per_zoom": per_zoom,
+                       "bytes": os.path.getsize(path), "tiles": len(tiles), "profil": prof.nom, "pixels_ecretes": clipped, "tiles_per_zoom": per_zoom,
                        "bytes_tiles": sum(len(b) for b in tiles.values())})
     t3 = time.time()
     total = t3 - t0

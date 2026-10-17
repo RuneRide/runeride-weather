@@ -56,7 +56,8 @@ class TileFile:
         if self.encoding == "wind8":
             return E.decode_wind8(img, float(self.meta["max"]))
         gray = img if img.ndim == 2 else img[..., 0]
-        return E.decode_scalar8(gray, self.variable, int(self.meta.get("levels", E.LEVELS)))
+        return E.decode_scalar8(gray, self.variable, int(self.meta.get("levels", E.LEVELS)),
+                                (self.meta["min"], self.meta["max"]))
 
     def sample(self, lon, lat, z):
         """Valeur au point (lon, lat) par bilinéaire sur la texture de la tuile (comme le client).

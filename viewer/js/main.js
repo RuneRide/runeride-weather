@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Page de visualisation RuneRide Météo (PoC J1) : carte MapLibre + calque WebGL de données.
-import { COUCHES, TUILE, couleurPalette } from './config.js';
+import { COUCHES, TUILE, couleurPalette, paramsDecodage } from './config.js';
 import { CoucheDonnees, tuilesVisibles } from './couche-gl.js';
-import { archive, demanderTuile, entreeCache, lireAuPoint, stats, surTuile } from './donnees.js';
+import { archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surTuile } from './donnees.js';
 import { Surcouche } from './fleches.js';
 
 const T0 = performance.timeOrigin; // début de navigation, pour les mesures
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const BENCH = params.has('bench');
+if (params.get('ui') === '0') document.documentElement.classList.add('sans-ui');
 const mesures = { nom: params.get('nom') || 'mesures', date: new Date().toISOString(), jalons: {} };
 const jalon = (nom) => { mesures.jalons[nom] = Math.round((performance.now()) * 10) / 10; };
 
 // ---------------------------------------------------------------- état
-const MONTAGES = { data: '/data', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
+const MONTAGES = { data: '/data', reduit: '/data-reduit', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
 const ZOOMS_MODELE = { 'arome-hd': [5, 8], arome: [3, 7] };
 const etat = {
   base: '', index: null, modele: 'arome-hd', tirage: null,
@@ -36,7 +37,7 @@ function resoudreTemps(couche, t) {
 
 // ---------------------------------------------------------------- inventaire des données
 async function choisirSource() {
-  const demande = params.get('src') || 'auto';
+  const demande = params.get('profil') === 'reduit' ? 'reduit' : params.get('profil') === 'contrat' ? 'data' : (params.get('src') || 'auto');
   const essais = demande === 'auto' ? ['data', 'synth'] : [demande];
   for (const nom of essais) {
     try {
@@ -45,8 +46,10 @@ async function choisirSource() {
       if (modeles.length) {
         etat.base = MONTAGES[nom]; etat.index = idx; etat.srcNom = nom;
         etat.modele = idx[params.get('modele')] ? params.get('modele') : (idx['arome-hd'] ? 'arome-hd' : modeles[0]);
+        // tirage par défaut : celui qui a le plus d'échéances de température (puis le plus récent)
+        const nb = r => (idx[etat.modele][r].t2m || []).length;
         const tirages = Object.keys(idx[etat.modele]).sort();
-        etat.tirage = params.get('run') || tirages[tirages.length - 1];
+        etat.tirage = params.get('run') || tirages.reduce((m, r) => nb(r) >= nb(m) ? r : m, tirages[0]);
         return;
       }
     } catch (e) { console.warn('source', nom, e); }
@@ -93,7 +96,7 @@ function appliquer() {
   if (!r) return;
   const [zmin, zmax] = zoomsDe(c);
   const urlA = urlFichier(c.variable, r.a), urlB = r.b !== null ? urlFichier(c.variable, r.b) : null;
-  couchegl.definir({ couche: c, urlA, urlB, mix: r.mix, opacite: 0.86, zmin, zmax, debug: etat.debug, sansBordure: etat.sansBordure });
+  couchegl.definir({ couche: c, urlA, urlB, mix: r.mix, opacite: etat.opacite ?? 0.86, zmin, zmax, debug: etat.debug, sansBordure: etat.sansBordure });
   etat.cur = { urlA, urlB, mix: r.mix, zmin, zmax, r };
   majHeure(r);
   surcouche.planifier(etatSurcouche());
@@ -101,7 +104,7 @@ function appliquer() {
   if (r.a !== dernierPre && etat.pretOuverture) { dernierPre = r.a; precharger(c, r); }
 }
 const etatSurcouche = () => ({ couche: etat.couche, urlA: etat.cur?.urlA, urlB: etat.cur?.urlB, mix: etat.cur?.mix || 0,
-  zoneZ: zoneZ(), zmin: etat.cur?.zmin || 3, point: etat.point, fleches: true });
+  zoneZ: zoneZ(), zmin: etat.cur?.zmin || 3, point: etat.point, fleches: !etat.sansFleches });
 
 /** Précharge les tuiles visibles des 3 prochaines échéances (spec §6.5 : ±3 h). */
 function precharger(c, r) {
@@ -141,7 +144,7 @@ function majInfo() {
   else if (!va && b && b.valeur) va = b.valeur;
   if (!a) { $('info-valeur').textContent = '…'; $('info-detail').textContent = pos + ' · chargement'; return; }
   if (!va) { $('info-valeur').textContent = '—'; $('info-detail').textContent = pos + ' · pas de donnée'; return; }
-  if (c.enc === 'wind12') {
+  if (c.dec.enc !== 'scalar8') {
     const [u, v] = va, vit = Math.hypot(u, v), dir = (270 - Math.atan2(v, u) * 180 / Math.PI + 360) % 360;
     $('info-valeur').textContent = `${(vit * 3.6).toFixed(0)} km/h`;
     $('info-detail').textContent = `${vit.toFixed(1)} m/s · ${(vit * 1.944).toFixed(0)} nd · de ${DIRS[Math.round(dir / 45) % 8]} ${dir.toFixed(0)}°  ${pos}`;
@@ -206,8 +209,11 @@ async function choisirCouche(c) {
 /** Lit l'en-tête PMTiles (zooms) de la 1re échéance : même requête initiale que les tuiles, mise en cache. */
 async function lireEntetes(c) {
   const url = urlFichier(c.variable, echeances(c)[0]);
-  if (etat.zoomsFichier.has(url)) return;
-  const h = await archive(url).getHeader();
+  if (etat.zoomsFichier.has(url) && c.dec) return;
+  const a = archive(url);
+  const [h, meta] = await Promise.all([a.getHeader(), a.getMetadata().catch(() => null)]);
+  // ?decodage=ancien : formule min/max du contrat initial (sert à la non-régression et à montrer l'erreur sur reduit)
+  c.dec = paramsDecodage(c, params.get('decodage') === 'ancien' ? null : meta);   // quant_step, levels, max, encoding : lus dans les métadonnées (contrat révision 2)
   etat.zoomsFichier.set(url, [h.minZoom, h.maxZoom]);
 }
 
@@ -291,15 +297,60 @@ async function attendreCharge(max = 20000) {
 
 // ---------------------------------------------------------------- API pour les captures et le banc d'essai
 window.__app = {
+  get surcouche() { return surcouche; },
   etat,
   async aller({ couche, t, centre, zoom }) {
     if (centre || zoom != null) map.jumpTo({ center: centre ? [centre[1], centre[0]] : map.getCenter(), zoom: zoom ?? map.getZoom() });
     if (couche) await choisirCouche(COUCHES.find(c => c.cle === couche));
     if (t != null) { etat.t = t; appliquer(); }
-    return attendreCharge();
+    const ok = await attendreCharge();
+    appliquer();   // redessine la surcouche avec l'état final, puis laisse deux images se rendre
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return ok;
   },
+  /** Charge TOUTE la frise (toutes les échéances de la couche) pour les tuiles visibles et renvoie les octets/requêtes mesurés. */
+  async mesurerFrise(cleCouche) {
+    const c = COUCHES.find(q => q.cle === cleCouche);
+    await choisirCouche(c); await attendreCharge();
+    const [zmin, zmax] = zoomsDe(c), tv = tuilesVisibles(map, zmin, zmax);
+    const o0 = stats.octetsDonnees, r0 = stats.requetesDonnees, t0 = performance.now(), S = echeances(c);
+    let pas = 0;
+    for (let i = 0; i < S.length; i += 6) {
+      await Promise.all(S.slice(i, i + 6).flatMap(s => tv.map(([z, x, y]) => demanderTuile(urlFichier(c.variable, s), z, x, y, c).promesse)));
+      pas++;
+    }
+    return { couche: cleCouche, echeances: S.length, tuiles_visibles_par_echeance: tv.length, octets: stats.octetsDonnees - o0,
+      requetes: stats.requetesDonnees - r0, ms: Math.round(performance.now() - t0), z: tv[0][0] };
+  },
+  fleches(on) { etat.sansFleches = !on; surcouche.planifier(etatSurcouche()); },
+  opacite(o) { etat.opacite = o; appliquer(); },
   epingler(lat, lng) { etat.point = { lat, lng, epingle: true }; majInfo(); surcouche.planifier(etatSurcouche()); },
   pret: attendreCharge,
+  /** Compare le décodage CPU du viewer à des valeurs de référence (décodeur Python) : pts = [{url, variable, lng, lat, z, ref:[..]}] */
+  async comparer(pts) {
+    const res = {};
+    const metas = {};
+    for (const q of pts) {
+      if (!metas[q.url]) {
+        const m = await archive(q.url).getMetadata();
+        const base = COUCHES.find(c => c.variable === q.variable) || { enc: m.encoding, min: m.min, max: m.max, echelle: m.scale };
+        metas[q.url] = { dec: paramsDecodage(base, m) };
+      }
+      const [lng, lat] = [q.lng, q.lat], n = 2 ** q.z, [mx, my] = mercator(lng, lat);
+      const e = demanderTuile(q.url, q.z, Math.floor(mx * n), Math.floor(my * n), metas[q.url]);
+      await e.promesse;
+      const r = lireAuPoint(q.url, metas[q.url], lng, lat, q.z, q.z);
+      const v = r && r.valeur;
+      const ecart = v ? Math.max(...v.map((x, i) => Math.abs(x - q.ref[i]))) : null;
+      (res[q.variable] ||= []).push(ecart);
+    }
+    const out = {};
+    for (const [k, a] of Object.entries(res)) {
+      const ok = a.filter(x => x !== null);
+      out[k] = { n: ok.length, sans_valeur: a.length - ok.length, ecart_max: Math.max(...ok) };
+    }
+    return out;
+  },
   /** Vérifie le shader contre le décodage CPU : n points au hasard, comparaison de la position dans la rampe. */
   /** Couture entre tuiles : rend la couche en niveaux de gris (position dans la rampe) avec puis sans la bordure
    *  d'1 px (clamp aux bords utiles) et compare les deux images pixel à pixel. */
@@ -341,7 +392,7 @@ window.__app = {
       if (!a || !a.valeur) continue;
       let v = a.valeur;
       if (cur.urlB && cur.mix > 0) { const b = lireAuPoint(cur.urlB, c, ll.lng, ll.lat, zoneZ(), cur.zmin); if (!b || !b.valeur) continue; v = v.map((q, i) => q + (b.valeur[i] - q) * cur.mix); }
-      const x0 = c.enc === 'wind12' ? Math.hypot(v[0], v[1]) : v[0];
+      const x0 = c.dec.enc !== 'scalar8' ? Math.hypot(v[0], v[1]) : v[0];
       if (x0 * c.aff.mul + c.aff.add < c.seuil) continue;   // sous le seuil d'affichage : transparent par construction
       let tt = Math.min(1, Math.max(0, (x0 * c.aff.mul + c.aff.add - leg.lo) / (leg.hi - leg.lo)));
       if (leg.axe === 'sqrt') tt = Math.sqrt(tt);
@@ -414,7 +465,7 @@ async function demarrer() {
   if (h.t != null) etat.t = h.t;
   construireCouches();
   $('modele').textContent = etat.modele === 'arome-hd' ? 'AROME HD' : 'AROME';
-  $('attrib-src').textContent = `· source des tuiles : ${etat.srcNom === 'data' ? 'tuiles réelles' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
+  $('attrib-src').textContent = `· tuiles : ${etat.srcNom === 'data' ? 'profil contrat' : etat.srcNom === 'reduit' ? 'profil reduit' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
   await creerCarte();
   jalon('carte_prete');
   surcouche.redimensionner();

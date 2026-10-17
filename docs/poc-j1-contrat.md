@@ -23,7 +23,7 @@ Règles : **ne pas écrire hors de son dossier**, **ne pas faire de commit ni de
 
 **Règle de décodage unique pour les scalaires linéaires**, valable pour tous les profils de poids : `v = min + (code − 1) × quant_step`, où `quant_step` est lu dans les métadonnées PMTiles. Pour le profil `contrat`, `quant_step = (max − min) / 254`, donc l'ancienne formule `min + (code−1)/254 × (max−min)` donne le même résultat. **Un décodeur qui utilise seulement `min` et `max` se trompe sur les autres profils** : constaté sur le profil `reduit` (température décodée avec 13,6 K d'erreur). Dans les métadonnées, `step` désigne désormais l'**échéance** et `quant_step` le pas de quantification.
 
-Profils (option `--profil`, le défaut reste `contrat`) : `contrat` (référence) et `reduit` (vent `wind8` sur ±48 m/s, pas de 0,5 K pour `t2m`, 1 % pour `rh2m` et `cloud_total`, 0,5 m/s pour `gust10`, zoom maximal 7 sauf `precip_rate` et `snow_fraction` qui gardent 8). **`wind8` est hors contrat** et n'est pas encore pris en charge par la visualisation.
+Profils (option `--profil`, le défaut reste `contrat`) : `contrat` (référence) et `reduit` (vent `wind8` sur ±48 m/s, pas de 0,5 K pour `t2m`, 1 % pour `rh2m` et `cloud_total`, 0,5 m/s pour `gust10`, zoom maximal 7 sauf `precip_rate` et `snow_fraction` qui gardent 8). **`wind8` est hors contrat** (pris en charge par la visualisation depuis le 17/10). Profil **`reduit2`** (retenu en production) : comme `reduit` avec `t2m` et `gust10` au pas de 0,25 sur des plages resserrées (243,15 à 306,65 K ; 0 à 63,5 m/s) ; la plage doit à terme être **propre à chaque fichier** (D14).
 
 ## 2. Champs canoniques (sortie de l'ingestion, entrée du tuilage)
 
