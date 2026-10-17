@@ -1,6 +1,6 @@
 # RuneRide Météo : spécifications (`weather.runeride.fr`)
 
-Statut : **spécification v0.1, rien n'est développé ni déployé.** Les mesures sur les données sont dans [donnees-arome.md](donnees-arome.md) ; ce document en reprend les conclusions. Vocabulaire : **mesuré** (vérifié sur les vrais fichiers), **ESTIMATION** (calcul à confirmer), **DÉCISION** (à valider), **OUVERT** (question à trancher).
+Statut : **spécification v0.2, rien n'est développé ni déployé.** Décisions prises le 17 octobre 2026 : **D1 validée** (calcul et données sur AWS), **service public**, **v1 élargie** (carte, fiche de point, météo d'itinéraire, pluie très court terme). Les mesures sur les données sont dans [donnees-arome.md](donnees-arome.md) ; ce document en reprend les conclusions. Vocabulaire : **mesuré** (vérifié sur les vrais fichiers), **ESTIMATION** (calcul à confirmer), **DÉCISION** (à valider), **OUVERT** (question à trancher).
 
 ## 1. Vision
 
@@ -12,11 +12,13 @@ Référence d'ergonomie : windy.com (carte plein écran, particules de vent anim
 
 ## 2. Périmètre
 
-**Inclus (v1)** : France métropolitaine et alentours (domaine AROME : 37,5–55,4°N, 12°O–16°E), prévisions de 0 à 51 h, couches vent, rafales, température, précipitations, nuages, pression, orages ; modèles AROME (0,025°) et AROME HD (0,01°) ; fiche de point ; météo le long d'un itinéraire ; interface installable (PWA), utilisable au guidon.
+**Inclus (v1)** : France métropolitaine et alentours (domaine AROME : 37,5–55,4°N, 12°O–16°E), prévisions de 0 à 51 h, couches vent, rafales, température, précipitations, nuages, pression, orages ; modèles AROME (0,025°) et AROME HD (0,01°) ; fiche de point (météogramme) ; météo le long d'un itinéraire ; **pluie très court terme (AROME-PI, voir réserve ci-dessous)** ; interface installable (PWA), utilisable au guidon ; **service public**, sans compte.
+
+**Réserve sur AROME-PI** : le wiki de Météo-France le présente comme open data (tirage horaire, 0 à 6 h par pas de 15 min), mais **aucun jeu AROME-PI n'a été trouvé** sur data.gouv.fr ni dans le stockage S3 qui héberge AROME et ARPEGE (`arome`, `arpege`, `phealth`, `vague-surcote`). Sa source, son format et son accès sont donc **à localiser avant de s'engager** (jalon J1b). Si elle exige une clé d'API ou n'est pas librement réutilisable, la pluie très court terme sort de la v1.
 
 **Exclus (v1)** : radar et satellite (non fournis par AROME ; pistes en §11), vagues, qualité de l'air, visibilité (paramètre non identifié), alertes. **Aucune alerte de sécurité n'est émise par RuneRide** : on renvoie vers la Vigilance Météo-France. Hors domaine AROME, rien n'est affiché (voir §11 pour une prévision de repli).
 
-**Pistes ultérieures** : AROME-PI (prévision immédiate, tirage horaire, pas de 15 min) et PIAF (pluie à 5 min) pour le très court terme ; AROME ensemble pour des probabilités.
+**Pistes ultérieures** : PIAF (pluie à 5 min) ; AROME ensemble pour des probabilités ; **extension européenne** par assemblage de modèles régionaux, avec **ARPEGE 0,1°** (Météo-France, 20–72°N, 32°O–42°E, 0 à 102 h) comme couche de base et **ICON-D2** (DWD, 2,2 km, Allemagne et alentours) en premier relais : voir [couverture-europe.md](couverture-europe.md), qui corrige aussi la liste de modèles reçue.
 
 ## 3. Données
 
@@ -243,6 +245,9 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | Stockage | ~4 à 5 Go pour 3 tirages (§5.1) | ESTIMATION |
 | Calcul | décodage 0,43 s pour 6 champs HD (mesuré) ; un tirage complet en 15 à 25 min sur 1 cœur, quelques minutes en parallèle | ESTIMATION |
 | Vie privée | position et trace ne servent qu'à répondre ; aucun traceur, aucune mesure d'audience tierce ; journaux sans coordonnées précises | DÉCISION |
+| **Service public : maîtrise du coût** | budget AWS avec alarmes et plafond, cache CDN long sur les tuiles (immuables par tirage), diffusion en `Range`, limitation de débit sur l'API point / itinéraire, quota de requêtes par IP | DÉCISION |
+| **Service public : abus** | pas de compte, donc limitation par IP ; l'API itinéraire est plus coûteuse que la carte (taille de trace plafonnée) ; interdiction du moissonnage massif dans les conditions d'utilisation | DÉCISION |
+| **Service public : conditions** | conditions d'utilisation et mentions légales sur le site (éditeur en nom propre, voir le site vitrine) ; l'avertissement du §9 reste visible | DÉCISION |
 
 ## 9. Légal et responsabilité
 
@@ -257,13 +262,16 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | Jalon | Contenu | Critère d'acceptation |
 |---|---|---|
 | **J0** | Valider ce document et les décisions D1 à D9 | décisions tranchées, noms de domaines figés |
+| **J1b** AROME-PI | localiser la source (portail API, autre jeu), format, licence, délai, volume ; décider de son entrée en v1 | source identifiée, licence confirmée, mesures reportées dans `donnees-arome.md`, décision écrite |
 | **J1** PoC données | un tirage AROME + HD : téléchargement, décodage, masque, dé-cumul, tuilage de vent, température, pluie | valeurs identiques à eccodes en 20 points de contrôle (écart ≤ pas de quantification) ; poids et temps mesurés et reportés ici |
 | **J2** PoC visualisation | MapLibre + couche couleur + frise interpolée sur un appareil réel | 30 images/s en animation, première couche < 2,5 s en 4G |
 | **J3** Vent et modèles | particules, rafales, bascule AROME / HD, isobares vectorielles, vent en altitude (option) | bascule invisible, pas de couture entre tuiles, particules adaptatives |
 | **J4** Point | météogramme, séries, API `/v1/point` | réponse en moins de 500 ms (ESTIMATION), valeurs égales à celles de la carte |
 | **J5** Production du pipeline | publication progressive, manifest, rétention, reprises, supervision, CloudFront, domaines | un tirage réel publié automatiquement, 7 jours sans intervention |
 | **J6** Itinéraire | `/v1/route`, vue le long du trajet, lien depuis l'application | résultat en moins de 2 s pour 500 points (ESTIMATION), aucune trace stockée |
-| **J7** Finitions | PWA hors-ligne, accessibilité, FR/EN, légal | audit manuel clavier et lecteur d'écran, attribution et avertissement vérifiés |
+| **J7** Finitions | PWA hors-ligne, accessibilité, FR/EN, légal, **garde-fous du service public** (§8) | audit manuel clavier et lecteur d'écran, attribution et avertissement vérifiés, alarmes de coût actives |
+| **J8** Très court terme | couche pluie à 15 min depuis AROME-PI (si J1b est positif) | échéances de 15 min jusqu'à +6 h affichées sans saut avec la frise horaire |
+| **J9** Europe (hors v1) | adaptateurs ARPEGE puis ICON-D2, contrat de variables, manifest multi-modèles, attributions dynamiques | un point à Munich et un à Lyon servis par le bon modèle, coutures documentées |
 
 **Tests** : jeux de fichiers GRIB réduits pour les tests unitaires (décodage, masque, dé-cumul, conversions, quantification aller-retour avec erreur maximale chiffrée) ; test de bout en bout du pipeline sur un tirage réel ; captures d'écran de référence pour la visualisation ; mesures de performance sur deux appareils ; surveillance de la fraîcheur.
 
@@ -278,8 +286,10 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | R5 | Tuiles | coutures et artefacts d'interpolation | bordure d'1 px, tests visuels |
 | R6 | Coût | diffusion supérieure aux estimations | CDN avec cache fort, compression, plafonds de budget |
 | R7 | Légal | réutilisation des tuiles dérivées et attribution | relecture de la licence, mention systématique |
+| R9 | AROME-PI | source ouverte non identifiée | jalon J1b avant tout engagement ; sinon la pluie très court terme sort de la v1 |
+| R10 | Multi-modèles | licences et formats hétérogènes, coutures visibles | priorité fixe, attribution dynamique, un adaptateur isolé par source (voir couverture-europe.md) |
 | R8 | Positionnement | un tiers pourrait croire à une alerte officielle | avertissements, aucun vocabulaire d'alerte |
-| O1 | Public | service réservé à l'application dans un premier temps (comme carto) ou ouvert ? | décision D0 |
+| O1 | Public | ~~service réservé à l'application ?~~ **Tranché le 17/10/2026 : service public**, sans compte | garde-fous du §8 |
 | O2 | Géocodage | quel service de recherche de lieu (données OSM, Nominatim public non adapté à l'usage commercial) ? | à étudier avec l'API carto |
 | O3 | Radar | quelle source pour la pluie observée (PIAF, autres jeux Météo-France) ? | étude après J3 |
 | O4 | Hors domaine | prévision de repli hors de la France (autre modèle) ? | hors v1 |
@@ -289,7 +299,7 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 
 | # | Décision | Recommandation |
 |---|---|---|
-| D1 | Calcul et données sur AWS, interface statique sur o2switch | oui |
+| D1 | Calcul et données sur AWS, interface statique sur o2switch | **validée le 17/10/2026** |
 | D2 | PMTiles par (modèle, tirage, variable, échéance) | oui |
 | D3 | Interpolation temporelle côté client | oui |
 | D4 | Moteur : MapLibre GL JS + couches WebGL personnalisées, avec TypeScript et un outil de build (l'interface est trop riche pour le sans build de la vitrine et de la PWA) | oui |
@@ -298,3 +308,5 @@ Unités SI en sortie (K, m/s, mm/h, hPa) avec l'unité dans la réponse ; le cli
 | D7 | Choix automatique du modèle par zoom, repli par couche | oui |
 | D8 | Publication progressive et repli sur le tirage précédent | oui |
 | D9 | Rétention de 3 tirages | oui |
+| D10 | Architecture multi-modèles : adaptateur par source, contrat de variables canoniques, manifest par modèle (v1 : AROME et HD seulement, mais le contrat est écrit dès le départ) | oui |
+| D11 | Couche de base Europe : ARPEGE 0,1° en premier, puis ICON-D2, hors v1 | oui |
