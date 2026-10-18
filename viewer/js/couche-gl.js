@@ -132,6 +132,9 @@ export class CoucheDonnees {
     this.map && this.map.triggerRepaint();
   }
 
+  /** N'affiche plus rien (couche Pression seule). */
+  masquer() { this.p = null; this.derniere = { tuiles: 0, manquantes: 0 }; this.map && this.map.triggerRepaint(); }
+
   onAdd(map, gl) {
     this.map = map; this.gl = gl;
     const prog = gl.createProgram();

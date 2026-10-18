@@ -4,6 +4,8 @@
 // comme image puis lues comme octets ; toute taille inattendue est rejetée.
 import { TUILE, decoderScalaire, decoderVent } from './config.js';
 
+const LATENCE = typeof location === 'undefined' ? 0 : Number(new URLSearchParams(location.search).get('latence') || 0);
+
 /** Compteurs de transfert (mesures). */
 export const stats = {
   requetesDonnees: 0, octetsDonnees: 0, // somme des corps de réponses Range PMTiles
@@ -23,6 +25,7 @@ export class SourceCompteuse {
   constructor(url, cat = 'donnees') { this.url = url; this.cat = cat; }
   getKey() { return this.url; }
   async getBytes(offset, length, signal) {
+    if (LATENCE && this.cat === 'donnees') await new Promise(r => setTimeout(r, LATENCE));   // ?latence=ms : réseau lent simulé (tests de bascule)
     const rep = await fetch(this.url, { signal, headers: { Range: `bytes=${offset}-${offset + length - 1}` } });
     if (rep.status !== 206 && rep.status !== 200) throw new Error(`HTTP ${rep.status} sur ${this.url}`);
     const data = await rep.arrayBuffer();

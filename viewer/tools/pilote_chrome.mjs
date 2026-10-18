@@ -51,6 +51,7 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride', { width: sc.largeur || 1280, height: sc.hauteur || 800,
     deviceScaleFactor: sc.dpr || 1, mobile: !!sc.mobile });
   if (sc.mobile) await cdp('Emulation.setTouchEmulationEnabled', { enabled: true });
+  if (sc.mouvementReduit) await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
   await cdp('Page.navigate', { url: sc.url });
   await pause(500);
   const evalJs = async (expr) => {

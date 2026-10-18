@@ -34,7 +34,7 @@ Mesurées sur la machine de développement, une exécution par ligne, extraction
 
 ### Recommandation de maxzoom
 
-**maxzoom 9** (175,1 Mo, livré : `out/basemap/domaine-z9.pmtiles`). Raisons : le z10 pèse 478 Mo (> 400 Mo, plafond fixé) ; le viewer s'arrête à 10,5, soit 1,5 niveau de surzoom de MapLibre au-delà de z9 ; le fond d'une carte météo sert de repère (côtes, frontières, grandes routes, villes) et la donnée météo la plus fine (0,01°, ~1 km) n'a pas plus de détail que ça. Les bâtiments n'existent qu'à partir de z11 dans ce schéma (vector_layers : `buildings` minzoom 11), donc aucun gain à z10 de ce côté ; le z10 ajoute surtout des routes secondaires et des points d'intérêt (jugement visuel, pas de mesure comparative). Capture de surzoom à 10,5 sur Toulouse : lisible, routes et noms présents (`fond-de-carte-toulouse-surzoom-clair.png`). Alternative légère pour la PWA hors ligne : **maxzoom 8, 53,9 Mo** (non évalué visuellement hors Alpes/France).
+**maxzoom 9** (175,1 Mo, livré : `out/basemap/domaine-z9.pmtiles`). Raisons : le z10 pèse 478 Mo (> 400 Mo, plafond fixé) ; le viewer s'arrête à 10,5, soit 1,5 niveau de surzoom de MapLibre au-delà de z9 ; le fond d'une carte météo sert de repère (côtes, frontières, grandes routes, villes) et la donnée météo la plus fine (0,01°, ~1 km) n'a pas plus de détail que ça. Les bâtiments n'existent qu'à partir de z11 dans ce schéma (vector_layers : `buildings` minzoom 11), donc aucun gain à z10 de ce côté ; le z10 ajoute surtout des routes secondaires et des points d'intérêt (jugement visuel, pas de mesure comparative). Capture de surzoom à 10,5 sur Toulouse : lisible, routes et noms présents (`fond-de-carte-toulouse-surzoom-clair.webp`). Alternative légère pour la PWA hors ligne : **maxzoom 8, 53,9 Mo** (non évalué visuellement hors Alpes/France).
 
 ## 3. Vérification du résultat
 
@@ -43,9 +43,9 @@ Mesurées sur la machine de développement, une exécution par ligne, extraction
 (a) En-tête : version 3 ; type de tuile MVT et compression gzip conservés ; zooms min/max de l'en-tête (0 et 9) = zooms réels ; ensemble des tuiles = exactement celles qui recoupent la boîte (2 184 présentes, 2 184 attendues) ; `addressed_tiles_count` 2 184, `tile_contents_count` 1 688 ; emprise de l'en-tête = (-12, 37.5, 16, 55.4) ; centre dans l'emprise, zoom 5 ; sections contiguës, taille de fichier cohérente ; racine 5 497 octets (< 16 257) ; `clustered` ; métadonnées de la source conservées à l'identique (attribution OSM, 9 couches `vector_layers`, `name`, `version` 4.15.2, `planetiler:*`), plus une clé ajoutée `runeride:extraction` (source, boîte, zooms, date).
 (b) 50 tuiles tirées au hasard (graine 20261017, zooms 5 à 9) relues par la bibliothèque dans l'extrait et dans la source distante : **octets identiques**, 0 différence.
 (c) Rendu réel : captures dans `docs/poc-j1/img/` (Chrome 155 sans interface, SwiftShader, 1280x800) :
-- `fond-de-carte-france-sombre.png`, `fond-de-carte-france-clair.png` (z5) ;
-- `fond-de-carte-alpes-sombre.png`, `fond-de-carte-alpes-clair.png` (z8,5) ;
-- `fond-de-carte-toulouse-surzoom-clair.png` (z10,5, surzoom au-delà de z9).
+- `fond-de-carte-france-sombre.webp`, `fond-de-carte-france-clair.webp` (z5) ;
+- `fond-de-carte-alpes-sombre.webp`, `fond-de-carte-alpes-clair.webp` (z8,5) ;
+- `fond-de-carte-toulouse-surzoom-clair.webp` (z10,5, surzoom au-delà de z9).
 Étiquettes en français (Londres, Genève, Turin, Brive-la-Gaillarde...). Requêtes sur le fichier : toutes en 206 (13 à z5 : 633 Ko ; 7 à z8,5 : 1,59 Mo ; 5 à z10,5 : 0,76 Mo). Bibliothèques JS depuis unpkg : ~302 Ko transférés.
 
 **Un bogue détecté par le contrôle (b)** : une première version écrivait les tuiles avec des offsets relatifs à la section de données de la source au lieu d'absolus ; l'en-tête et les comptes étaient cohérents mais 50 tuiles sur 50 étaient fausses. Corrigé, tout a été remesuré (les chiffres ci-dessus sont ceux après correction).

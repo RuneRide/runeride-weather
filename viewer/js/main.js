@@ -1,60 +1,59 @@
 // SPDX-License-Identifier: EUPL-1.2
-// Page de visualisation RuneRide Météo (PoC J1) : carte MapLibre + calque WebGL de données.
+// Page de visualisation RuneRide Météo : carte MapLibre + calque WebGL de données + particules de vent + isobares,
+// pilotée par le manifest (choix automatique du modèle et du tirage, frise en temps valide UTC). Voir docs/poc-j3/integration.md.
 import { COUCHES, TUILE, couleurPalette, paramsDecodage } from './config.js';
 import { CoucheDonnees, tuilesVisibles } from './couche-gl.js';
 import { SourceCompteuse, archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surTuile } from './donnees.js';
 import { Surcouche } from './fleches.js';
+import { AROME, AROME_HD, attribution, choisirTirage, cheminFichier, plageTemps, resoudre, tirages } from './modele-auto.js';
+import * as IL from './integration-logique.js';
+import { ParticulesVent } from './particules.js';
+import { ajouterIsobares, echeanceCourante, majEcheance, retirerIsobares } from './isobares.js';
 
-const T0 = performance.timeOrigin; // début de navigation, pour les mesures
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const BENCH = params.has('bench');
 if (params.get('ui') === '0') document.documentElement.classList.add('sans-ui');
 const mesures = { nom: params.get('nom') || 'mesures', date: new Date().toISOString(), jalons: {} };
 const jalon = (nom) => { mesures.jalons[nom] = Math.round((performance.now()) * 10) / 10; };
+const H = 3600e3;
 
 // ---------------------------------------------------------------- état
 const MONTAGES = { reduit2: '/data-reduit2', data: '/data', reduit: '/data-reduit', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
 const ZOOMS_MODELE = { 'arome-hd': [5, 8], arome: [3, 7] };
+const PRESSION = { cle: 'pression', nom: 'Pression', variable: null, pseudo: true };   // pas de raster : isobares seules
 const etat = {
-  base: '', index: null, modele: 'arome-hd', tirage: null,
-  couche: COUCHES[0], t: 0, lecture: false, vitesse: 1, point: null, zoomsFichier: new Map(),
+  base: '', manifest: null, mode: IL.normaliserMode(params.get('modele')),
+  couche: COUCHES[0], tValide: 0, lecture: false, vitesse: 1, point: null, zoomsVar: new Map(),
+  vue: null, precedent: null, affiche: null, desire: null, enAttente: false, changementCouche: false,
+  particules: false, particulesExplicite: false, isobares: false, refT: 0,
 };
-const pad2 = n => String(n).padStart(2, '0');
-const urlFichier = (variable, step) => `${etat.base}/${etat.modele}/${etat.tirage}/${variable}/${pad2(step)}.pmtiles`;
-const echeances = (couche) => (etat.index?.[etat.modele]?.[etat.tirage]?.[couche.variable]) || [];
+const nomModele = m => (m === AROME_HD ? 'AROME HD' : 'AROME');
 
-/** Pour un instant t (en heures depuis le tirage) : échéances A, B voisines et poids de mélange. */
-function resoudreTemps(couche, t) {
-  const S = echeances(couche);
-  if (!S.length) return null;
-  const tc = Math.min(S[S.length - 1], Math.max(S[0], t));
-  let a = S[0];
-  for (const s of S) if (s <= tc) a = s;
-  const b = S.includes(a + 1) ? a + 1 : null;
-  return { a, b, mix: b !== null ? Math.min(1, tc - a) : 0, S, tc };
-}
-
-// ---------------------------------------------------------------- inventaire des données
-async function choisirSource() {
+// ---------------------------------------------------------------- manifest
+async function chargerManifest() {
   const demande = { reduit2: 'reduit2', reduit: 'reduit', contrat: 'data' }[params.get('profil')] || params.get('src') || 'auto';
   const essais = demande === 'auto' ? ['reduit2', 'data', 'synth'] : [demande];
+  let manifest = null;
+  try { manifest = await (await fetch('/manifest/manifest.json')).json(); } catch (e) { console.warn('manifest', e); }
   for (const nom of essais) {
     try {
       const idx = await (await fetch(MONTAGES[nom] + '/index.json')).json();
-      const modeles = Object.keys(idx);
-      if (modeles.length) {
-        etat.base = MONTAGES[nom]; etat.index = idx; etat.srcNom = nom;
-        etat.modele = idx[params.get('modele')] ? params.get('modele') : (idx['arome-hd'] ? 'arome-hd' : modeles[0]);
-        // tirage par défaut : celui qui a le plus d'échéances de température (puis le plus récent)
-        const nb = r => (idx[etat.modele][r].t2m || []).length;
-        const tirages = Object.keys(idx[etat.modele]).sort();
-        etat.tirage = params.get('run') || tirages.reduce((m, r) => nb(r) >= nb(m) ? r : m, tirages[0]);
-        return;
-      }
+      if (!Object.keys(idx).length) continue;
+      etat.base = MONTAGES[nom]; etat.srcNom = nom;
+      // les jeux synthétiques n'ont pas de manifest : on le déduit de l'inventaire ; sinon le manifest du pipeline fait foi
+      etat.manifest = (nom === 'synth' || nom === 'sans' || nom === 'brute' || !manifest) ? IL.manifestDepuisIndex(idx) : manifest;
+      etat.refT = Math.min(...Object.keys(etat.manifest.models).flatMap(m => tirages(etat.manifest, m)).map(r => Date.parse(r.run)));
+      return;
     } catch (e) { console.warn('source', nom, e); }
   }
   throw new Error('aucune tuile trouvée (lancez le tuilage ou viewer/tools/synth_tiles.py)');
+}
+/** Plage de temps valide de la couche active (ms UTC), selon le mode : { debut, fin }. */
+function plage() {
+  const c = etat.couche;
+  if (c.pseudo) return IL.plageIsobares(etat.manifest) || { debut: etat.refT, fin: etat.refT };
+  return (etat.mode !== 'auto' && plageTemps(etat.manifest, c.cle, { modele: etat.mode })) || plageTemps(etat.manifest, c.cle) || { debut: etat.refT, fin: etat.refT };
 }
 
 // ---------------------------------------------------------------- carte
@@ -64,7 +63,7 @@ const OPACITE = Number(params.get('opacite') || 0.85);
 const AVEC_FOND = params.get('fond') !== '0';
 const THEME = ['clair', 'light'].includes(params.get('theme')) ? 'light' : 'dark';
 const URL_FOND = new URL('/basemap/domaine-z9.pmtiles', location.href).href;
-// couches du fond placées AU-DESSUS de la couche météo : routes, frontières, libellés, points d'intérêt
+// couches du fond placées AU-DESSUS de la météo : routes, frontières, libellés, points d'intérêt
 // (terre, occupation du sol, eau et rivières restent EN DESSOUS : la météo se lit aussi sur la mer ; pistes d'aéroport sous la météo)
 const RE_HAUT = /^(roads_(?!runway|taxiway)|boundaries|places_|pois|water_label|water_waterway|earth_label|address|buildings)/;
 function construireStyle() {
@@ -81,17 +80,17 @@ function construireStyle() {
     layers: basemaps.layers('protomaps', basemaps.namedFlavor(THEME), { lang: 'fr' }),
   };
 }
-/** Identifiant de la première couche du fond qui doit rester au-dessus de la météo (null = tout en haut). */
+/** Identifiant de la première couche du fond qui doit rester au-dessus de la météo (undefined = tout en haut). */
 function idPremiereCoucheHaute() {
   const l = map.getStyle().layers.find(q => RE_HAUT.test(q.id));
   return l ? l.id : undefined;
 }
-let map, couchegl, surcouche;
+let map, couchegl, surcouche, particules = null;
 
 function creerCarte() {
   map = new maplibregl.Map({
     container: 'carte', style: construireStyle(), attributionControl: false, minZoom: 2.5, maxZoom: 10.5,
-    bounds: [[-6, 41], [10.5, 51.5]], fitBoundsOptions: { padding: { top: 110, bottom: 190, left: 10, right: 10 } },
+    bounds: [[-6, 41], [10.5, 51.5]], fitBoundsOptions: { padding: { top: 150, bottom: 190, left: 10, right: 10 } },
     pitchWithRotate: false, dragRotate: false, touchPitch: false, maxPitch: 0, fadeDuration: 0,
     canvasContextAttributes: { antialias: false },
   });
@@ -100,59 +99,122 @@ function creerCarte() {
   surcouche = new Surcouche($('surcouche'), map);
   return new Promise(res => map.on('load', res));
 }
+/** Vue utilisée pour le choix du modèle : mise à jour en fin de geste seulement (hystérésis, pas à chaque image). */
+function majVue() { etat.vue = { zoom: map.getZoom(), bounds: map.getBounds().toArray() }; }
 
-// ---------------------------------------------------------------- mise à jour de l'affichage
-function zoomsDe(couche) {
-  const s = echeances(couche);
-  const z = s.length && etat.zoomsFichier.get(urlFichier(couche.variable, s[0]));
-  return z || ZOOMS_MODELE[etat.modele] || [3, 8];
+// ---------------------------------------------------------------- résolution (modèle, tirage, fichiers)
+const zoomsDe = (modele, variable) => etat.manifest.models?.[modele]?.zooms?.[variable] || etat.zoomsVar.get(`${modele}/${variable}`) || ZOOMS_MODELE[modele] || [3, 8];
+const fichier = (t, step) => `${etat.base}/${cheminFichier(etat.manifest, t.modele, t.id, t.variable, step)}`;
+/** Fichiers A, B et poids de mélange d'un tirage résolu. */
+function fichiersDe(t) { return { urlA: fichier(t, t.step), urlB: t.stepSuivant != null ? fichier(t, t.stepSuivant) : null, mix: t.fraction }; }
+/** Résolution complète pour la couche active à l'instant `tValide` (modèle D7 puis tirage D8, repli compris). */
+function calculerDesire(tValide = etat.tValide) {
+  const c = etat.couche;
+  if (c.pseudo || !etat.vue) return null;
+  return resoudre({ zoom: etat.vue.zoom, bounds: etat.vue.bounds, couche: c.cle, mode: etat.mode, manifest: etat.manifest, precedent: etat.precedent, tValide });
 }
-function zoneZ() { const [a, b] = zoomsDe(etat.couche); return Math.max(a, Math.min(b, Math.round(map.getZoom() + 1))); }
+/** Les tuiles visibles de la résolution `res` sont-elles toutes là (ou absentes du fichier) ? Demande celles qui manquent. */
+function pretPour(res) {
+  const c = etat.couche, { urlA, urlB } = fichiersDe(res.tirage);
+  const [zmin, zmax] = zoomsDe(res.modele, c.variable);
+  let pret = true;
+  for (const [z, x, y] of tuilesVisibles(map, zmin, zmax)) {
+    for (const u of [urlA, urlB]) {
+      if (!u) continue;
+      const e = demanderTuile(u, z, x, y, c);
+      if (e.etat === 'charge') pret = false;
+    }
+  }
+  return pret;
+}
+function zoneZ() { const cur = etat.cur; const [a, b] = cur ? [cur.zmin, cur.zmax] : [3, 8]; return Math.max(a, Math.min(b, Math.round(map.getZoom() + 1))); }
 
 let dernierPre = -1;
 function appliquer() {
-  const c = etat.couche, r = resoudreTemps(c, etat.t);
-  if (!r) return;
-  const [zmin, zmax] = zoomsDe(c);
-  const urlA = urlFichier(c.variable, r.a), urlB = r.b !== null ? urlFichier(c.variable, r.b) : null;
-  couchegl.definir({ couche: c, urlA, urlB, mix: r.mix, opacite: etat.opacite ?? OPACITE, zmin, zmax, debug: etat.debug, sansBordure: etat.sansBordure });
-  etat.cur = { urlA, urlB, mix: r.mix, zmin, zmax, r };
-  majHeure(r);
+  const c = etat.couche;
+  majHeure();
+  if (c.pseudo) {
+    couchegl.masquer(); etat.cur = null; etat.affiche = null; etat.desire = null; etat.enAttente = false;
+    surcouche.planifier(etatSurcouche()); majInfo(); majAffichageModele(); majParticulesChamp(); majIsobares();
+    return;
+  }
+  if (!c.dec) return;                      // paramètres de décodage pas encore lus (changement de couche en cours)
+  const d = calculerDesire();
+  etat.desire = d;
+  if (!d) return;
+  if (d.choix && d.choix.modele) etat.precedent = d.choix;
+  if (!d.tirage) { majAffichageModele(); return; }               // instant non publié : on garde l'affichage
+  // bascule sans clignotement : tant que les tuiles du nouveau calque ne sont pas là, l'ancien reste affiché
+  const ancien = etat.affiche && etat.affiche.tirage ? { modele: etat.affiche.modele, tirage: choisirTirage({ modele: etat.affiche.modele, variable: c.variable, tValide: etat.tValide, manifest: etat.manifest }) } : null;
+  const decision = IL.decisionBascule({
+    affiche: etat.affiche, desire: d, pret: pretPour(d), changementCouche: etat.changementCouche,
+    ancienValide: !!(ancien && ancien.tirage),
+  });
+  if (decision === 'echanger') { etat.affiche = d; etat.changementCouche = false; etat.enAttente = false; }
+  else { etat.enAttente = true; }
+  const res = etat.enAttente && ancien ? { ...etat.affiche, ...ancien } : etat.affiche;
+  const t = res.tirage, f = fichiersDe(t), [zmin, zmax] = zoomsDe(res.modele, c.variable);
+  couchegl.definir({ couche: c, urlA: f.urlA, urlB: f.urlB, mix: f.mix, opacite: etat.opacite ?? OPACITE, zmin, zmax, debug: etat.debug, sansBordure: etat.sansBordure });
+  etat.cur = { urlA: f.urlA, urlB: f.urlB, mix: f.mix, zmin, zmax, res, modele: res.modele };
   surcouche.planifier(etatSurcouche());
-  majInfo();
-  if (r.a !== dernierPre && etat.pretOuverture) { dernierPre = r.a; precharger(c, r); }
+  majInfo(); majAffichageModele(); majParticulesChamp(); majIsobares();
+  if (t.step !== dernierPre && etat.pretOuverture) { dernierPre = t.step; precharger(c, res); }
 }
+const flechesVisibles = () => !etat.sansFleches && !(etat.particules && particules && particules.visibles);
 const etatSurcouche = () => ({ couche: etat.couche, urlA: etat.cur?.urlA, urlB: etat.cur?.urlB, mix: etat.cur?.mix || 0,
-  zoneZ: zoneZ(), zmin: etat.cur?.zmin || 3, point: etat.point, fleches: !etat.sansFleches });
+  zoneZ: zoneZ(), zmin: etat.cur?.zmin || 3, point: etat.point, fleches: flechesVisibles() });
 
-/** Précharge les tuiles visibles des 3 prochaines échéances (spec §6.5 : ±3 h). */
-function precharger(c, r) {
-  const [zmin, zmax] = zoomsDe(c);
+/** Précharge les tuiles visibles des 3 heures suivantes (spec §6.5), dans le modèle affiché. */
+function precharger(c, res) {
+  const [zmin, zmax] = zoomsDe(res.modele, c.variable);
   const tv = tuilesVisibles(map, zmin, zmax);
   for (let k = 1; k <= 3; k++) {
-    const s = r.a + k;
-    if (!r.S.includes(s)) continue;
-    for (const [z, x, y] of tv) demanderTuile(urlFichier(c.variable, s), z, x, y, c);
+    const t = choisirTirage({ modele: res.modele, variable: c.variable, tValide: etat.tValide + k * H, manifest: etat.manifest });
+    if (!t) continue;
+    const u = fichier(t, t.step);
+    for (const [z, x, y] of tv) demanderTuile(u, z, x, y, c);
   }
 }
 
-const fmtJour = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
-const fmtHeure = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' });
-const fmtUTC = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
-function majHeure(r) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})Z$/.exec(etat.tirage);
-  const debut = m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4]) : Date.now();
-  const d = new Date(debut + r.tc * 3600e3);
-  $('heure-locale').textContent = `${fmtJour.format(d)} · ${fmtHeure.format(d)}`;
-  $('heure-detail').textContent = `+${r.tc.toFixed(1).replace('.', ',')} h · ${fmtUTC.format(d)} UTC · tirage ${etat.tirage.slice(11, 13)} h`;
+// ---------------------------------------------------------------- heure, pastille, attribution
+function majHeure() {
+  const p = IL.formaterTemps(etat.tValide);
+  $('heure-locale').textContent = p.local; $('heure-decalage').textContent = p.decalage;
+  $('heure').title = p.infobulle;
+  const t = etat.affiche && etat.affiche.tirage;
+  const ech = t ? ((etat.tValide - Date.parse(t.run)) / H) : null;
+  $('heure-detail').textContent = `${p.utc} UTC` + (t ? ` · +${ech.toFixed(1).replace('.', ',')} h · tirage ${t.id.slice(11, 13)} h` : '');
+  const { debut, fin } = plage();
   const f = $('frise');
-  if (document.activeElement !== f || etat.lecture) f.value = r.tc;
+  f.min = 0; f.max = (fin - debut) / H;
+  if (document.activeElement !== f || etat.lecture) f.value = IL.positionFrise(etat.tValide, debut, fin);
+}
+function majAffichageModele() {
+  const a = etat.affiche, c = etat.couche, vue = etat.vue;
+  let pastille, avis = '';
+  if (c.pseudo) {
+    pastille = `AROME 0,025° · tirage ${(IL.tirageIsobares(etat.manifest)?.id || '').slice(11, 13)} h UTC`;
+  } else {
+    pastille = IL.textePastille(a, etat.manifest);
+    avis = etat.enAttente
+      ? `Bascule vers ${nomModele(etat.desire.modele)} : chargement…`
+      : IL.avisRepli(a, { mode: etat.mode, manifest: etat.manifest, zoom: vue?.zoom ?? null });
+    if (!a && etat.desire && !etat.desire.tirage) avis = 'Échéance non publiée pour cette couche.';
+  }
+  const iso = etat.isobares || c.pseudo;
+  if (iso && a && a.modele === AROME_HD) avis = (avis ? avis + ' ' : '') + 'Pression : AROME (pas de pression en HD).';
+  $('pastille').textContent = pastille;
+  $('pastille').dataset.modele = a ? a.modele : '';
+  $('avis').textContent = avis; $('avis').hidden = !avis;
+  const modeleAttrib = c.pseudo ? AROME : (a && a.modele);
+  $('attrib-modele').textContent = attribution(modeleAttrib, etat.manifest);
+  for (const b of $('modeles').children) b.setAttribute('aria-pressed', String(b.dataset.m === etat.mode));
 }
 
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
 function majInfo() {
   const box = $('info');
-  if (!etat.point || !etat.cur) { box.hidden = true; return; }
+  if (!etat.point || !etat.cur || etat.couche.pseudo) { box.hidden = true; return; }
   const { lng, lat } = etat.point, c = etat.couche, cur = etat.cur;
   const a = lireAuPoint(cur.urlA, c, lng, lat, zoneZ(), cur.zmin);
   let b = cur.urlB && cur.mix > 0 ? lireAuPoint(cur.urlB, c, lng, lat, zoneZ(), cur.zmin) : null;
@@ -176,16 +238,24 @@ function majInfo() {
 
 // ---------------------------------------------------------------- légende
 function majLegende() {
-  const c = etat.couche, leg = c.legende;
+  const c = etat.couche;
+  const cv = $('leg-barre'), ticks = $('leg-ticks');
+  if (c.pseudo) {
+    $('leg-titre').textContent = 'Pression au niveau de la mer (hPa)';
+    cv.hidden = true; ticks.textContent = 'Isobares tous les 2 hPa · A anticyclone · D dépression'; ticks.classList.add('texte');
+    return;
+  }
+  cv.hidden = false; ticks.classList.remove('texte');
+  const leg = c.legende;
   $('leg-titre').textContent = `${c.nom} (${c.aff.unite})`;
-  const cv = $('leg-barre'), ctx = cv.getContext('2d');
+  const ctx = cv.getContext('2d');
   const img = ctx.createImageData(256, 1);
   for (let i = 0; i < 256; i++) {
     const col = couleurPalette(c.palette, i / 255), a = col[3] / 255, k = i * 4;
     img.data[k] = col[0]; img.data[k + 1] = col[1]; img.data[k + 2] = col[2]; img.data[k + 3] = Math.round(255 * Math.max(a, 0.0));
   }
   ctx.putImageData(img, 0, 0);
-  const ticks = $('leg-ticks'); ticks.textContent = '';
+  ticks.textContent = '';
   for (const v of leg.ticks) {
     let f = (v - leg.lo) / (leg.hi - leg.lo);
     if (leg.axe === 'sqrt') f = Math.sqrt(Math.max(0, f));
@@ -196,71 +266,131 @@ function majLegende() {
   }
 }
 
+// ---------------------------------------------------------------- particules et isobares
+/** Le vent à l'instant courant dans le modèle affiché : { urlA, urlB, mix, zmin, zmax, dec } ou null. */
+function champVent() {
+  const cv = COUCHES.find(q => q.cle === 'vent');
+  if (!cv.dec) return null;
+  const modele = etat.affiche?.modele || etat.desire?.modele || etat.precedent?.modele || AROME_HD;
+  let t = etat.couche.cle === 'vent' && etat.affiche?.tirage ? etat.affiche.tirage : null;
+  if (!t) t = choisirTirage({ modele, variable: 'wind10', tValide: etat.tValide, manifest: etat.manifest });
+  if (!t) { const autre = modele === AROME_HD ? AROME : AROME_HD; t = choisirTirage({ modele: autre, variable: 'wind10', tValide: etat.tValide, manifest: etat.manifest }); }
+  if (!t) return null;
+  const f = fichiersDe(t), [zmin, zmax] = zoomsDe(t.modele, 'wind10');
+  return { ...f, zmin, zmax, dec: cv.dec };
+}
+function majParticulesChamp() {
+  if (!particules) return;
+  if (etat.particules) { particules.activer(); particules.setTemps(etat.tValide); } else particules.desactiver();
+  majBoutons();
+}
+async function creerParticules() {
+  const cv = COUCHES.find(q => q.cle === 'vent');
+  if (!cv.dec) await lireEntetes(cv);
+  particules = new ParticulesVent({ fournisseurChamp: () => champVent(), actif: etat.particules, surEtat: () => { majBoutons(); surcouche.planifier(etatSurcouche()); } });
+  map.addLayer(particules, idPremiereCoucheHaute());
+  document.addEventListener('visibilitychange', () => {      // onglet masqué : pause totale, reprise au retour
+    if (document.hidden) particules.desactiver(); else if (etat.particules) particules.activer();
+  });
+}
+let isoEnCours = false;
+async function majIsobares() {
+  const on = etat.isobares || etat.couche.pseudo;
+  if (!on) { if (echeanceCourante(map) !== null) retirerIsobares(map); return; }
+  const e = IL.echeanceIsobares(etat.manifest, etat.tValide);
+  if (!e || isoEnCours) return;
+  try {
+    if (echeanceCourante(map) === null) {
+      isoEnCours = true;
+      await ajouterIsobares(map, { src: `/isobares/${e.src}`, avant: etat.idHaut, echeance: e.echeance, valeurs: AVEC_FOND, extrema: true });
+      etat.isoSrc = e.src;
+    } else if (e.echeance !== echeanceCourante(map)) {
+      isoEnCours = true;
+      await majEcheance(map, e.echeance);
+    }
+  } catch (err) { console.warn('isobares', err); }
+  finally { isoEnCours = false; }
+}
+function majBoutons() {
+  const p = $('opt-particules'), i = $('opt-isobares');
+  if (!p) return;
+  p.setAttribute('aria-pressed', String(!!etat.particules));
+  const reduit = particules && particules.etat.mouvementReduit;
+  p.title = reduit ? 'Mouvement réduit demandé : flèches à la place des particules' : 'Particules de vent animées';
+  p.dataset.reduit = reduit ? '1' : '';
+  i.setAttribute('aria-pressed', String(!!(etat.isobares || etat.couche.pseudo)));
+}
+
 // ---------------------------------------------------------------- interface
 function construireCouches() {
   const nav = $('couches');
   nav.textContent = '';
-  for (const c of COUCHES) {
+  for (const c of [...COUCHES, PRESSION]) {
     const b = document.createElement('button');
     b.textContent = c.nom; b.dataset.cle = c.cle;
-    b.disabled = echeances(c).length === 0;
+    b.disabled = c.pseudo ? !IL.tirageIsobares(etat.manifest) : !plageTemps(etat.manifest, c.cle);
     b.setAttribute('aria-pressed', String(c === etat.couche));
     b.addEventListener('click', () => choisirCouche(c));
     nav.appendChild(b);
   }
 }
 async function choisirCouche(c) {
-  if (!echeances(c).length) return;
-  etat.couche = c;
+  if (!c) return;
+  const ancienne = etat.couche;
+  etat.couche = c; etat.changementCouche = true;
   for (const b of $('couches').children) {
     b.setAttribute('aria-pressed', String(b.dataset.cle === c.cle));
     if (b.dataset.cle === c.cle) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }
-  await lireEntetes(c);
-  const S = echeances(c);
-  const f = $('frise'); f.min = S[0]; f.max = S[S.length - 1];
-  etat.t = Math.min(S[S.length - 1], Math.max(S[0], etat.t));
+  if (!c.pseudo) await lireEntetes(c);
+  if (!etat.particulesExplicite) etat.particules = c.cle === 'vent';   // particules par défaut sur la couche Vent seulement
+  const { debut, fin } = plage();
+  etat.tValide = Math.min(fin, Math.max(debut, etat.tValide));
   majLegende();
   dernierPre = -1;
+  if (c.pseudo || ancienne.pseudo) etat.affiche = null;
   appliquer();
   ecrireHash();
 }
-/** Lit l'en-tête PMTiles (zooms) de la 1re échéance : même requête initiale que les tuiles, mise en cache. */
+/** Lit en-tête et métadonnées PMTiles du premier fichier de la couche (modèle préféré d'abord) : paramètres de décodage et zooms. */
 async function lireEntetes(c) {
-  const url = urlFichier(c.variable, echeances(c)[0]);
-  if (etat.zoomsFichier.has(url) && c.dec) return;
-  const a = archive(url);
-  const [h, meta] = await Promise.all([a.getHeader(), a.getMetadata().catch(() => null)]);
-  // ?decodage=ancien : formule min/max du contrat initial (sert à la non-régression et à montrer l'erreur sur reduit)
-  c.dec = paramsDecodage(c, params.get('decodage') === 'ancien' ? null : meta);   // quant_step, levels, max, encoding : lus dans les métadonnées (contrat révision 2)
-  etat.zoomsFichier.set(url, [h.minZoom, h.maxZoom]);
+  const preferes = [etat.precedent?.modele, AROME_HD, AROME].filter(Boolean);
+  for (const m of preferes) {
+    const r = tirages(etat.manifest, m).find(q => q.variables?.[c.variable]?.steps?.length);
+    if (!r) continue;
+    const step = r.variables[c.variable].steps[0];
+    const url = `${etat.base}/${cheminFichier(etat.manifest, m, r.id, c.variable, step)}`;
+    if (c.dec && etat.zoomsVar.has(`${m}/${c.variable}`)) return;
+    const a = archive(url);
+    const [h, meta] = await Promise.all([a.getHeader(), a.getMetadata().catch(() => null)]);
+    // ?decodage=ancien : formule min/max du contrat initial (non-régression, démonstration de l'erreur sur reduit)
+    if (!c.dec) c.dec = paramsDecodage(c, params.get('decodage') === 'ancien' ? null : meta);   // quant_step, levels, max, encoding lus dans les métadonnées
+    etat.zoomsVar.set(`${m}/${c.variable}`, [h.minZoom, h.maxZoom]);
+    return;
+  }
 }
 
 function lecture(on) {
   etat.lecture = on;
   $('lecture').textContent = on ? '❚❚' : '▶';
   $('lecture').setAttribute('aria-label', on ? 'Pause' : 'Lecture');
+  if (!on) ecrireHash();
   if (on) { dernierT = performance.now(); requestAnimationFrame(boucle); }
 }
 let dernierT = 0;
 function boucle(now) {
   if (!etat.lecture) return;
   const dt = (now - dernierT) / 1000; dernierT = now;
-  const S = echeances(etat.couche), lo = S[0], hi = S[S.length - 1];
-  etat.t += dt * etat.vitesse; // ×1 = 1 h de prévision par seconde
-  if (etat.t > hi) etat.t = lo + (etat.t - hi);
+  const { debut, fin } = plage();
+  etat.tValide = IL.avancer(etat.tValide, dt, etat.vitesse, debut, fin);   // ×1 = 1 h de prévision par seconde
   appliquer();
   requestAnimationFrame(boucle);
 }
 
 function ecrireHash() {
-  const c = map.getCenter();
-  history.replaceState(null, '', location.search + `#couche=${etat.couche.cle}&t=${etat.t.toFixed(2)}&c=${c.lat.toFixed(3)},${c.lng.toFixed(3)}&z=${map.getZoom().toFixed(2)}`);
-}
-function lireHash() {
-  const h = new URLSearchParams(location.hash.slice(1));
-  return { couche: h.get('couche'), t: h.has('t') ? parseFloat(h.get('t')) : null,
-    c: h.get('c')?.split(',').map(Number), z: h.has('z') ? parseFloat(h.get('z')) : null };
+  if (!map || !etat.vue) return;
+  history.replaceState(null, '', location.search + '#' + IL.ecrireHash({ couche: etat.couche.cle, tValide: etat.tValide, centre: map.getCenter(),
+    zoom: map.getZoom(), mode: etat.mode, particules: etat.particules, isobares: etat.isobares }));
 }
 
 function brancherInterface() {
@@ -271,29 +401,36 @@ function brancherInterface() {
     etat.vitesse = etat.vitesse === 1 ? 2 : etat.vitesse === 2 ? 4 : 1;
     $('vitesse').textContent = '×' + etat.vitesse;
   });
-  $('frise').addEventListener('input', e => { etat.t = parseFloat(e.target.value); appliquer(); });
+  $('frise').addEventListener('input', e => { const { debut, fin } = plage(); etat.tValide = IL.tempsDepuisFrise(parseFloat(e.target.value), debut, fin); appliquer(); });
   $('frise').addEventListener('change', ecrireHash);
+  for (const b of $('modeles').children) b.addEventListener('click', () => { etat.mode = b.dataset.m; appliquer(); ecrireHash(); });
+  $('opt-particules').addEventListener('click', () => { etat.particules = !etat.particules; etat.particulesExplicite = true; majParticulesChamp(); surcouche.planifier(etatSurcouche()); ecrireHash(); });
+  $('opt-isobares').addEventListener('click', () => {
+    if (etat.couche.pseudo) return;              // la couche Pression est toujours avec isobares
+    etat.isobares = !etat.isobares; majBoutons(); majIsobares(); majAffichageModele(); ecrireHash();
+  });
   $('info-fermer').addEventListener('click', () => { etat.point = null; majInfo(); surcouche.planifier(etatSurcouche()); });
   map.on('mousemove', e => { if (!etat.point?.epingle) { etat.point = { lng: e.lngLat.lng, lat: e.lngLat.lat, epingle: false }; majInfo(); } });
   map.on('click', e => { etat.point = { lng: e.lngLat.lng, lat: e.lngLat.lat, epingle: true }; majInfo(); surcouche.planifier(etatSurcouche()); });
   map.on('move', () => surcouche.planifier(etatSurcouche()));
-  map.on('moveend', () => { if (etat.pretOuverture && etat.cur) precharger(etat.couche, etat.cur.r); ecrireHash(); });
+  map.on('moveend', () => { majVue(); appliquer(); if (etat.pretOuverture && etat.cur && !etat.couche.pseudo) precharger(etat.couche, etat.cur.res); ecrireHash(); });
   window.addEventListener('resize', () => { surcouche.redimensionner(); surcouche.planifier(etatSurcouche()); });
   window.addEventListener('keydown', e => {
     if (e.target.tagName === 'BUTTON' && e.key === ' ') return;
-    const pas = e.shiftKey ? 6 : 1, S = echeances(etat.couche);
+    const pas = e.shiftKey ? 6 : 1, { debut, fin } = plage();
     if (e.key === ' ') { lecture(!etat.lecture); e.preventDefault(); }
-    else if (e.key === 'ArrowRight') { etat.t = Math.min(S[S.length - 1], Math.round(etat.t) + pas); appliquer(); }
-    else if (e.key === 'ArrowLeft') { etat.t = Math.max(S[0], Math.round(etat.t) - pas); appliquer(); }
-    else if (e.key === 'Home') { etat.t = S[0]; appliquer(); }
-    else if (e.key === 'End') { etat.t = S[S.length - 1]; appliquer(); }
+    else if (e.key === 'ArrowRight') { etat.tValide = IL.pasClavier(etat.tValide, pas, debut, fin); appliquer();  ecrireHash(); }
+    else if (e.key === 'ArrowLeft') { etat.tValide = IL.pasClavier(etat.tValide, -pas, debut, fin); appliquer();  ecrireHash(); }
+    else if (e.key === 'Home') { etat.tValide = debut; appliquer();  ecrireHash(); }
+    else if (e.key === 'End') { etat.tValide = fin; appliquer();  ecrireHash(); }
   });
 }
 
 // ---------------------------------------------------------------- attente « tout est chargé »
 function toutCharge() {
   const cur = etat.cur;
-  if (!cur) return false;
+  if (etat.couche.pseudo) return true;
+  if (!cur || etat.enAttente) return false;
   for (const [z, x, y] of tuilesVisibles(map, cur.zmin, cur.zmax || 8)) {
     for (const u of [cur.urlA, cur.urlB]) {
       if (!u) continue;
@@ -308,6 +445,8 @@ async function attendreCharge(max = 20000) {
   const t = performance.now();
   while (performance.now() - t < max) {
     await new Promise(r => requestAnimationFrame(r));
+    if (etat.enAttente) appliquer();
+    if (etat.couche.pseudo) { await attendre(300); return true; }
     if (toutCharge() && couchegl.derniere.tuiles > 0) { await attendre(120); if (toutCharge()) return true; }
     await attendre(50);
   }
@@ -317,31 +456,47 @@ async function attendreCharge(max = 20000) {
 // ---------------------------------------------------------------- API pour les captures et le banc d'essai
 window.__app = {
   get surcouche() { return surcouche; },
+  get particules() { return particules; },
+  stats,
+  get couchegl() { return couchegl; },
   carte() { return map; },
   etat,
-  async aller({ couche, t, centre, zoom }) {
+  /** Va à une vue : couche, t (heures depuis le plus ancien tirage) ou tValide (ISO/ms), centre [lat, lng], zoom, mode, particules, isobares. */
+  async aller({ couche, t, tValide, centre, zoom, mode, particules: p, isobares }) {
+    if (mode) etat.mode = IL.normaliserMode(mode);
+    if (p !== undefined) { etat.particules = !!p; etat.particulesExplicite = true; }
+    if (isobares !== undefined) etat.isobares = !!isobares;
     if (centre || zoom != null) map.jumpTo({ center: centre ? [centre[1], centre[0]] : map.getCenter(), zoom: zoom ?? map.getZoom() });
-    if (couche) await choisirCouche(COUCHES.find(c => c.cle === couche));
-    if (t != null) { etat.t = t; appliquer(); }
+    majVue();
+    if (couche) await choisirCouche(couche === 'pression' ? PRESSION : COUCHES.find(c => c.cle === couche));
+    if (tValide != null) etat.tValide = typeof tValide === 'string' ? Date.parse(tValide) : tValide;
+    if (t != null) etat.tValide = etat.refT + t * H;
+    appliquer(); majBoutons();
     const ok = await attendreCharge();
     appliquer();   // redessine la surcouche avec l'état final, puis laisse deux images se rendre
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     return ok;
   },
-  /** Charge TOUTE la frise (toutes les échéances de la couche) pour les tuiles visibles et renvoie les octets/requêtes mesurés. */
+  /** Charge TOUTE la frise de la couche (modèle affiché) pour les tuiles visibles et renvoie les octets/requêtes mesurés. */
   async mesurerFrise(cleCouche) {
-    const c = COUCHES.find(q => q.cle === cleCouche);
-    await choisirCouche(c); await attendreCharge();
-    const [zmin, zmax] = zoomsDe(c), tv = tuilesVisibles(map, zmin, zmax);
-    const o0 = stats.octetsDonnees, r0 = stats.requetesDonnees, t0 = performance.now(), S = echeances(c);
-    let pas = 0;
-    for (let i = 0; i < S.length; i += 6) {
-      await Promise.all(S.slice(i, i + 6).flatMap(s => tv.map(([z, x, y]) => demanderTuile(urlFichier(c.variable, s), z, x, y, c).promesse)));
-      pas++;
+    await choisirCouche(COUCHES.find(q => q.cle === cleCouche)); await attendreCharge();
+    const c = etat.couche, modele = etat.affiche.modele, [zmin, zmax] = zoomsDe(modele, c.variable), tv = tuilesVisibles(map, zmin, zmax);
+    const o0 = stats.octetsDonnees, r0 = stats.requetesDonnees, t0 = performance.now(), { debut, fin } = plage();
+    const heures = []; for (let h = debut; h <= fin; h += H) heures.push(h);
+    let n = 0;
+    for (let i = 0; i < heures.length; i += 6) {
+      await Promise.all(heures.slice(i, i + 6).flatMap(h => {
+        const t = choisirTirage({ modele, variable: c.variable, tValide: h, manifest: etat.manifest });
+        if (!t) return [];
+        n++;
+        return tv.map(([z, x, y]) => demanderTuile(fichier(t, t.step), z, x, y, c).promesse);
+      }));
     }
-    return { couche: cleCouche, echeances: S.length, tuiles_visibles_par_echeance: tv.length, octets: stats.octetsDonnees - o0,
+    return { couche: cleCouche, modele, echeances: n, tuiles_visibles_par_echeance: tv.length, octets: stats.octetsDonnees - o0,
       requetes: stats.requetesDonnees - r0, ms: Math.round(performance.now() - t0), z: tv[0][0] };
   },
+  texte() { return { pastille: $('pastille').textContent, avis: $('avis').textContent, attribution: $('attrib').textContent, heure: $('heure-locale').textContent,
+    heureDetail: $('heure-detail').textContent, titre: $('heure').title }; },
   fleches(on) { etat.sansFleches = !on; surcouche.planifier(etatSurcouche()); },
   /** Alignement fond / météo : sur une bande de lignes traversant une côte, position de la plus forte variation du fond
    *  (eau/terre, couche météo à opacité 0) et de la couche t2m rendue en niveaux de gris (mode debug), en pixels écran. */
@@ -459,7 +614,7 @@ window.__app = {
     etat.debug = false; appliquer();
     const err = out.map(o => Math.abs(o.cpu - o.gpu));
     const tri = err.slice().sort((a, b) => a - b);
-    return { couche: c.cle, t: etat.t, n: out.length, ecart_max: Math.max(...err), ecart_p95: tri[Math.floor(tri.length * 0.95)], ecart_median: tri[Math.floor(tri.length / 2)], lsb: 1 / 255 };
+    return { couche: c.cle, t: etat.tValide, n: out.length, ecart_max: Math.max(...err), ecart_p95: tri[Math.floor(tri.length * 0.95)], ecart_median: tri[Math.floor(tri.length / 2)], lsb: 1 / 255 };
   },
   mesures,
 };
@@ -475,11 +630,11 @@ async function banc() {
     const m = await archive(etat.cur.urlA).getMetadata();
     rep('metadonnees', m);
   } catch (e) { rep('metadonnees', String(e)); }
-  // animation : vent, ×4, 8 s, on compte les images réellement rendues par MapLibre
+  // animation : ×4, `duree` ms, on compte les images réellement rendues par MapLibre
   stats.phase = 'animation';
   const dur = Number(params.get('duree') || 8000);
   await choisirCouche(COUCHES.find(c => c.cle === (params.get('couche') || 'vent')));
-  etat.vitesse = 4; etat.t = echeances(etat.couche)[0]; appliquer();
+  etat.vitesse = 4; etat.tValide = plage().debut; appliquer();
   await attendreCharge();
   const ts = []; const surRendu = () => ts.push(performance.now());
   map.on('render', surRendu);
@@ -497,7 +652,6 @@ async function banc() {
   rep('tuiles_ms', { n: stats.ms.length, moyen: +(stats.ms.reduce((a, b) => a + b, 0) / (stats.ms.length || 1)).toFixed(1) });
   rep('fond', { actif: AVEC_FOND, ...stats.fond });
   rep('total', { octets: stats.octetsDonnees, requetes: stats.requetesDonnees, par_phase: stats.parPhase });
-  // poids des bibliothèques et du fond de carte (ressources externes)
   rep('ressources', performance.getEntriesByType('resource').filter(e => !e.name.includes('.pmtiles'))
     .map(e => ({ url: e.name.replace(location.origin, ''), transfert: e.transferSize, corps: e.encodedBodySize })));
   rep('webgl', (() => { const g = map.painter.context.gl, d = g.getExtension('WEBGL_debug_renderer_info');
@@ -514,36 +668,45 @@ function finBanc() {
 // ---------------------------------------------------------------- démarrage
 async function demarrer() {
   jalon('module_charge');
-  await choisirSource();
-  jalon('index_lu');
-  const h = lireHash();
-  const depart = COUCHES.find(c => c.cle === (h.couche || params.get('couche') || 'vent') && echeances(c).length) || COUCHES.find(c => echeances(c).length);
+  await chargerManifest();
+  jalon('manifest_lu');
+  const h = IL.lireHash(location.hash);
+  const cleDepart = h.couche || params.get('couche') || 'vent';
+  const depart = cleDepart === 'pression' ? PRESSION : (COUCHES.find(c => c.cle === cleDepart && plageTemps(etat.manifest, c.cle)) || COUCHES.find(c => plageTemps(etat.manifest, c.cle)));
   etat.couche = depart;
-  if (h.t != null) etat.t = h.t;
+  if (h.mode) etat.mode = h.mode;
+  if (h.particules !== null) { etat.particules = h.particules; etat.particulesExplicite = true; }
+  else if (params.has('particules')) { etat.particules = params.get('particules') !== '0'; etat.particulesExplicite = true; }
+  else etat.particules = depart.cle === 'vent';
+  etat.isobares = h.isobares !== null ? h.isobares : params.get('isobares') === '1';
+  const pl = plage();
+  etat.tValide = h.tValide ?? (params.has('t') ? etat.refT + Number(params.get('t')) * H : Math.floor(Date.now() / H) * H)   // par défaut : l'heure courante, bornée à la frise;
+  etat.tValide = Math.min(pl.fin, Math.max(pl.debut, etat.tValide));
   construireCouches();
-  $('modele').textContent = etat.modele === 'arome-hd' ? 'AROME HD' : 'AROME';
   $('attrib-src').textContent = `· tuiles : ${etat.srcNom === 'data' ? 'profil contrat' : etat.srcNom === 'reduit' ? 'profil reduit' : etat.srcNom === 'reduit2' ? 'profil reduit2' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
   await creerCarte();
   jalon('carte_prete');
   surcouche.redimensionner();
-  if (h.c && h.z != null) map.jumpTo({ center: [h.c[1], h.c[0]], zoom: h.z });
-  await lireEntetes(depart);
+  if (h.centre && h.zoom != null) map.jumpTo({ center: [h.centre.lng, h.centre.lat], zoom: h.zoom });
+  majVue();
+  if (!depart.pseudo) await lireEntetes(depart);
   jalon('entete_lue');
-  const S = echeances(depart);
-  const f = $('frise'); f.min = S[0]; f.max = S[S.length - 1];
-  etat.t = Math.min(S[S.length - 1], Math.max(S[0], etat.t));
   brancherInterface();
-  surTuile(() => { map.triggerRepaint(); majInfo(); surcouche.planifier(etatSurcouche()); });
+  surTuile(() => { map.triggerRepaint(); if (etat.enAttente) appliquer(); else majInfo(); surcouche.planifier(etatSurcouche()); });
   couchegl.surPremiere = () => { requestAnimationFrame(() => { jalon('premiere_couche_visible'); mesures.premiere_couche_ms = mesures.jalons.premiere_couche_visible; }); };
-  map.addLayer(couchegl, idPremiereCoucheHaute());
+  etat.idHaut = idPremiereCoucheHaute();
+  map.addLayer(couchegl, etat.idHaut);
+  if (params.get('particules') !== '0' && etat.manifest.couches?.vent) await creerParticules();
   map.once('idle', () => { jalon('carte_complete_idle'); });
+  etat.changementCouche = true;
   majLegende();
   appliquer();
   attendreCharge().then(() => {
     jalon('tout_charge_ouverture');
     mesures.ouverture = { octets: stats.octetsDonnees, requetes: stats.requetesDonnees, tuiles_chargees: stats.tuilesChargees,
       tuiles_absentes: stats.tuilesAbsentes, tuiles_dessinees: couchegl.derniere.tuiles, fond: { ...stats.fond } };
-    etat.pretOuverture = true; stats.phase = 'precharge'; if (!BENCH) appliquer(); });
+    if (params.get('precharge') !== '0') { etat.pretOuverture = true; stats.phase = 'precharge'; if (!BENCH) appliquer(); }   // ?precharge=0 : mesure de l'ouverture seule
+  });
   if (BENCH) banc();
 }
 demarrer().catch(e => {

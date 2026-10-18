@@ -27,12 +27,16 @@ RACINE = os.path.dirname(os.path.abspath(__file__))
 DEPOT = os.path.dirname(RACINE)
 MONTAGES = {
     "/data": os.path.join(DEPOT, "out", "tiles"),
+    "/manifest": os.path.join(DEPOT, "out", "manifest"),
+    "/isobares": os.path.join(DEPOT, "out", "isobars"),
     "/basemap": os.path.join(DEPOT, "out", "basemap"),
     "/data-reduit2": os.path.join(DEPOT, "out", "tiles-reduit2"),
     "/data-reduit": os.path.join(DEPOT, "out", "tiles-reduit"),
     "/data-synth": os.path.join(DEPOT, "out", "tiles-synth"),
     "/data-sans": os.path.join(DEPOT, "out", "tiles-synth-sans"),
     "/data-brute": os.path.join(DEPOT, "out", "tiles-synth-brute"),
+    "/isobares": os.path.join(DEPOT, "out", "isobars"),
+    "/manifest": os.path.join(DEPOT, "out", "manifest"),
 }
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 MESURES_DIR = None

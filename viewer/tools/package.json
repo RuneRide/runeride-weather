@@ -1,0 +1,7 @@
+{
+  "name": "runeride-weather-viewer-tools",
+  "private": true,
+  "license": "EUPL-1.2",
+  "description": "Outils du viewer ; `node --test viewer/tools` exécute tout.test.mjs.",
+  "main": "tout.test.mjs"
+}

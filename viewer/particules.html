@@ -1,0 +1,144 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: EUPL-1.2 -->
+<!-- Page de démonstration autonome des particules de vent (J3). Ne dépend que de js/particules*.js, config.js,
+     donnees.js et couche-gl.js (lecture seule). Paramètres d'URL : ?t=heures &nombre=N &stockage=paquete
+     &reduit=1|0 (force le mouvement réduit) &c=lat,lng &z=zoom &run=2026-10-17T03Z &profil=reduit2|reduit|contrat (dossier /data-<profil>). -->
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Particules de vent · RuneRide Météo (J3)</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css"
+        integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+  <style>
+    :root { --fond: #17191C; --texte: #EBE8E0; --accent: #C6934B; --panneau: rgba(23, 25, 28, 0.9); --discret: #A9A69E; }
+    html, body { margin: 0; height: 100%; background: var(--fond); color: var(--texte); font: 15px/1.35 system-ui, sans-serif; }
+    #carte { position: absolute; inset: 0; }
+    #panneau { position: absolute; left: 12px; right: 12px; bottom: 12px; max-width: 560px; padding: 12px 14px; background: var(--panneau);
+      border: 1px solid rgba(235, 232, 224, .18); border-radius: 10px; display: grid; gap: 10px; }
+    .ligne { display: grid; grid-template-columns: 110px 1fr 84px; gap: 10px; align-items: center; min-height: 48px; }
+    .ligne output { text-align: right; font-variant-numeric: tabular-nums; color: var(--discret); }
+    input[type=range] { width: 100%; height: 48px; accent-color: var(--accent); }
+    button, label.inter { min-height: 48px; padding: 0 16px; border-radius: 8px; border: 1px solid rgba(235, 232, 224, .3); background: #22262b;
+      color: var(--texte); font: inherit; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+    #barre { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    #etat { color: var(--discret); font-size: 13px; }
+    #flechesAvis { display: none; color: var(--accent); }
+    #mesures { display: none; }
+    #legende { position: absolute; right: 12px; top: 12px; background: var(--panneau); padding: 8px 10px; border-radius: 8px; font-size: 12px; }
+    #legende canvas { width: 180px; height: 10px; display: block; margin-bottom: 4px; }
+    #legende div { display: flex; justify-content: space-between; color: var(--discret); }
+  </style>
+</head>
+<body>
+  <div id="carte" aria-label="Carte du vent"></div>
+  <section id="legende" aria-label="Légende du vent">
+    <canvas id="leg" width="256" height="1"></canvas>
+    <div><span>0</span><span>25</span><span>50</span><span>75</span><span>100 km/h</span></div>
+  </section>
+  <section id="panneau">
+    <div id="barre">
+      <label class="inter"><input type="checkbox" id="inter" checked> Particules</label>
+      <button id="lecture" aria-label="Lecture">&#9654;</button>
+      <label class="inter"><input type="checkbox" id="reduit"> Mouvement réduit</label>
+    </div>
+    <div class="ligne"><label for="temps">Échéance</label><input type="range" id="temps" min="0" max="51" step="0.05" value="0"><output id="tempsV"></output></div>
+    <div class="ligne"><label for="nombre">Particules</label><input type="range" id="nombre" min="500" max="40000" step="500" value="10000"><output id="nombreV"></output></div>
+    <div class="ligne"><label for="vitesse">Vitesse</label><input type="range" id="vitesse" min="0.5" max="10" step="0.5" value="3"><output id="vitesseV"></output></div>
+    <div id="etat" role="status"></div>
+    <div id="flechesAvis">Mouvement réduit : l'interface doit afficher les flèches de vent à la place des particules.</div>
+  </section>
+  <pre id="mesures"></pre>
+
+  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"
+          integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"
+          integrity="sha384-pbKNZbDshUsLnZMIVsn/t+j3xEY9PGfuX5Z22l5rcy/obXz3EwaMx1F5d9sRsJMn" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@protomaps/basemaps@5.7.2/dist/basemaps.js"
+          integrity="sha384-fzuU7k7ZWwfZAe1+3h7plrSA6dNazJaM2NsKVwcrReJLK0gwVwyOSyPwROl9m1M0" crossorigin="anonymous"></script>
+  <script type="module">
+    import { ParticulesVent } from './js/particules.js';
+    import { fournisseurPmtiles } from './js/particules-champ.js';
+    import { COUCHES, texturePalette } from './js/config.js';
+    import { stats } from './js/donnees.js';
+
+    const $ = id => document.getElementById(id);
+    const params = new URLSearchParams(location.search);
+    const RUN = params.get('run') || '2026-10-17T03Z';
+    const PROFIL = params.get('profil') || 'reduit2';
+    const ECHEANCES = Array.from({ length: 52 }, (_, i) => i);
+    const urlEcheance = h => new URL(`/data-${PROFIL}/arome-hd/${RUN}/wind10/${String(h).padStart(2, '0')}.pmtiles`, location.href).href;
+
+    // légende : la rampe du vent du viewer
+    const lc = $('leg').getContext('2d'), img = lc.createImageData(256, 1), pal = texturePalette(COUCHES[0].palette);
+    for (let i = 0; i < 256; i++) { img.data[4 * i] = pal[4 * i]; img.data[4 * i + 1] = pal[4 * i + 1]; img.data[4 * i + 2] = pal[4 * i + 2]; img.data[4 * i + 3] = 255; }
+    lc.putImageData(img, 0, 0);
+
+    // fond sombre simple : couches terre/eau du fond Protomaps local, sans étiquettes (pas de polices à charger)
+    const URL_FOND = new URL('/basemap/domaine-z9.pmtiles', location.href).href;
+    maplibregl.addProtocol('pmtiles', new pmtiles.Protocol().tile);
+    const couchesFond = basemaps.layers('protomaps', basemaps.namedFlavor('dark'), { lang: 'fr' }).filter(l => l.type !== 'symbol');
+    const centre = (params.get('c') || '46.6,2.4').split(',').map(Number);
+    const map = new maplibregl.Map({
+      container: 'carte', attributionControl: false, minZoom: 2.5, maxZoom: 10.5, center: [centre[1], centre[0]], zoom: Number(params.get('z') || 5.3),
+      pitchWithRotate: false, dragRotate: false, touchPitch: false, maxPitch: 0, fadeDuration: 0, canvasContextAttributes: { antialias: false },
+      style: { version: 8, sources: { protomaps: { type: 'vector', url: 'pmtiles://' + URL_FOND, attribution: '' } }, layers: couchesFond },
+    });
+    map.touchZoomRotate.disableRotation();
+
+    const champ = fournisseurPmtiles({ urlEcheance, echeances: ECHEANCES });
+    const nombreUrl = params.get('nombre') ? Number(params.get('nombre')) : undefined;
+    const part = new ParticulesVent({
+      id: 'particules-vent', fournisseurChamp: champ.fournisseur, nombre: nombreUrl, stockage: params.get('stockage') || 'auto',
+      surEtat: majEtat,
+    });
+    let t = Number(params.get('t') || 0);
+
+    function majEtat(e = part.etat) {
+      $('etat').textContent = `${e.visibles ? 'animées' : e.indisponible ? 'indisponibles (' + e.indisponible + ')' : 'arrêtées'} · stockage ${e.stockage} · ${e.nombre} particules` +
+        (e.adaptatif ? ' (auto' + (e.msBanc != null ? ', banc ' + e.msBanc.toFixed(1) + ' ms' : '') + ')' : '') + (e.mouvementReduit ? ' · mouvement réduit' : '');
+      $('flechesAvis').style.display = e.actif && e.mouvementReduit ? 'block' : 'none';
+      $('reduit').checked = e.mouvementReduit;
+      $('inter').checked = e.actif;
+      if (e.adaptatif) $('nombre').value = e.nombre;
+      $('nombreV').textContent = e.nombre;
+    }
+    function majTemps() {
+      $('tempsV').textContent = 'h+' + t.toFixed(2);
+      part.setTemps(t); $('temps').value = t;
+    }
+
+    map.on('load', async () => {
+      const premiere = map.getStyle().layers.find(l => /^(roads_(?!runway|taxiway)|boundaries)/.test(l.id));
+      map.addLayer(part, premiere && premiere.id);
+      if (params.get('reduit') === '1') part.reduireMouvement(true);
+      else if (params.get('reduit') === '0') part.reduireMouvement(false);
+      await champ.pret;
+      majTemps(); majEtat();
+      document.body.dataset.pret = '1';
+    });
+
+    $('inter').onchange = e => e.target.checked ? part.activer() : part.desactiver();
+    $('reduit').onchange = e => part.reduireMouvement(e.target.checked);
+    $('temps').oninput = e => { t = Number(e.target.value); majTemps(); };
+    $('nombre').oninput = e => { part.setNombre(Number(e.target.value)); majEtat(); };
+    $('vitesse').oninput = e => { part.regler({ pxParMs: Number(e.target.value) }); $('vitesseV').textContent = e.target.value + ' px/s par m/s'; };
+    $('vitesseV').textContent = '3 px/s par m/s';
+    let lecture = false, dernier = 0;
+    $('lecture').onclick = () => {
+      lecture = !lecture; $('lecture').innerHTML = lecture ? '&#10074;&#10074;' : '&#9654;'; dernier = performance.now();
+      if (lecture) requestAnimationFrame(function boucle(now) {
+        if (!lecture) return;
+        t += (now - dernier) / 1000 * 0.5; dernier = now;       // une demi-heure de prévision par seconde
+        if (t > 51) t = 0;
+        majTemps(); requestAnimationFrame(boucle);
+      });
+    };
+
+    // accès pour les vérifications (pilote CDP) et mesures indépendantes de la machine
+    window.__p = { map, part, champ, stats, majTemps, setT: v => { t = v; majTemps(); },
+      mesures: () => ({ requetesTuiles: stats.requetesTuiles, tuilesChargees: stats.tuilesChargees, tuilesAbsentes: stats.tuilesAbsentes,
+        requetesDonnees: stats.requetesDonnees, octetsDonnees: stats.octetsDonnees }) };
+  </script>
+</body>
+</html>

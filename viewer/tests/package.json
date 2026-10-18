@@ -1,0 +1,7 @@
+{
+  "name": "runeride-weather-viewer-tests",
+  "private": true,
+  "license": "EUPL-1.2",
+  "description": "Tests Node natifs (node --test). Le champ main permet à `node --test viewer/tests/` de résoudre le dossier (Node 24 ne l'expand plus seul).",
+  "main": "tout.test.mjs"
+}
