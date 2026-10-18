@@ -8,7 +8,7 @@
 use crate::erreur::{Erreur, ErreurSource, ErreurStockage};
 use crate::message::Valide;
 use crate::source::SourceGrib;
-use crate::stockage::{Stockage, ETAT, NPZ, PMTILES};
+use crate::stockage::{Meta, Stockage, CACHE_IMMUABLE, ETAT, NPZ, PMTILES};
 use crate::temps;
 use rayon::prelude::*;
 use rw_cli::{canon, npz};
@@ -19,6 +19,10 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 pub const SCHEMA_ETAT: u32 = 1;
+
+/// GeoJSON des isobares lu par `viewer/js/isobares.js`. Type `application/json` : compressible à la volée par le CDN
+/// (voir `docs/poc-rust/isobares.md` §5 pour le stockage pré-compressé, qui demande `Content-Encoding` dans `rw-aws`).
+pub const GEOJSON: Meta = Meta { type_contenu: "application/json", cache: CACHE_IMMUABLE };
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -79,6 +83,11 @@ impl Cles<'_> {
     pub fn isobares(&self) -> String {
         format!("{}/_isobares/{:02}.npz", self.dossier(), self.w.echeance)
     }
+    /// GeoJSON des isobares : `<préfixe>/isobares/<modèle>/<tirage>/NN.geojson`, de sorte que l'URL du viewer
+    /// (`/isobares/<modèle>/<tirage>/NN.geojson`) correspond à la clé par simple origine `/<préfixe>`.
+    pub fn isobares_geojson(&self) -> String {
+        format!("{}/isobares/{}/{}/{:02}.geojson", self.prefixe, self.w.modele, self.w.tirage_court, self.w.echeance)
+    }
     pub fn domaine(&self) -> String {
         format!("{}/_domaine/{:02}.npz", self.dossier(), self.w.echeance)
     }
@@ -116,7 +125,7 @@ fn deja_complet(w: &Valide, cles: &Cles<'_>, sortie: &dyn Stockage) -> Result<bo
         let (Some(cle), Some(o)) = (v["cle"].as_str(), v["octets"].as_u64()) else { return Ok(false) };
         attendus.push((cle.to_string(), o));
     }
-    for k in ["isobares", "domaine"] {
+    for k in ["isobares", "isobares_geojson", "domaine"] {
         if !etat[k].is_null() {
             let (Some(cle), Some(o)) = (etat[k]["cle"].as_str(), etat[k]["octets"].as_u64()) else { return Ok(false) };
             attendus.push((cle.to_string(), o));
@@ -264,6 +273,21 @@ pub fn traiter(w: &Valide, source: &dyn SourceGrib, sortie: &dyn Stockage, cfg: 
         sortie.ecrire(&cles.isobares(), &o, &NPZ).map_err(stock)?;
         isobares = json!({"cle": cles.isobares(), "octets": o.len(), "variable": "mslp", "unite": "Pa"});
     }
+    // isobares finales (GeoJSON du viewer) : calcul Rust de `pipeline/isobars`, octet pour octet identique au Python
+    let t_iso = Instant::now();
+    let mut isobares_geojson = Value::Null;
+    if let Some(mslp) = c.variable("mslp") {
+        let entete = rw_isobares::Entete { modele: w.modele.clone(), tirage: w.tirage_long.clone(), echeance: w.echeance };
+        let params = rw_isobares::Params::default();
+        let r = pool.install(|| rw_isobares::calculer(&c.lat, &c.lon, mslp, &params)).map_err(Erreur::definitive)?;
+        let geojson = rw_isobares::geojson::vers_geojson(&r, &entete, &params).into_bytes();
+        sortie.ecrire(&cles.isobares_geojson(), &geojson, &GEOJSON).map_err(stock)?;
+        isobares_geojson = json!({
+            "cle": cles.isobares_geojson(), "octets": geojson.len(),
+            "lignes": r.stats.lignes, "sommets": r.stats.sommets, "extrema": r.stats.extrema,
+        });
+    }
+    let isobares_s = t_iso.elapsed().as_secs_f64();
     // masque du domaine : t2m à l'échéance de référence ; compatible `pipeline.manifest.build.polygone_modele`
     let mut domaine = Value::Null;
     if cfg.echeance_domaine == Some(w.echeance) {
@@ -297,13 +321,14 @@ pub fn traiter(w: &Valide, source: &dyn SourceGrib, sortie: &dyn Stockage, cfg: 
         },
         "variables": Value::Object(variables),
         "isobares": isobares,
+        "isobares_geojson": isobares_geojson,
         "domaine": domaine,
         "sources": sources,
         "mesures": {
             "telechargement_s": telechargement_s, "octets_telecharges": octets_telecharges,
             "decodage_grib_s": et.decodage_grib_s, "calcul_canonique_s": et.calcul_canonique_s, "champs_decodes": et.champs_decodes,
             "tuilage_s": tuilage_s, "rechantillonnage_encodage_s": mesures_tuiles.rechantillonnage_encodage_s,
-            "ecriture_s": ecriture_s, "fils": pool.current_num_threads(),
+            "ecriture_s": ecriture_s, "isobares_s": isobares_s, "fils": pool.current_num_threads(),
             "octets_pmtiles": fichiers.iter().map(|f| f.octets.len()).sum::<usize>(),
             "total_s": debut.elapsed().as_secs_f64(),
         },

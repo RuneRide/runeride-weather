@@ -49,6 +49,43 @@ pub fn amz(t: i64) -> String {
     format!("{a:04}{m:02}{d:02}T{h:02}{mi:02}{s:02}Z")
 }
 
+/// Analyse `2026-10-17T03:00:00Z`, `2026-10-17T03:00:00.000Z` (listage S3) ou `2026-10-17T03Z` (forme courte
+/// des tirages) et renvoie les secondes Unix. `None` si la forme ou la date est invalide.
+pub fn depuis_iso(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if !s.is_ascii() || b.len() < 14 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || *b.last()? != b'Z' {
+        return None;
+    }
+    let n = |a: usize, z: usize| -> Option<i64> {
+        let t = s.get(a..z)?;
+        (t.bytes().all(|c| c.is_ascii_digit()) && !t.is_empty()).then(|| t.parse().ok()).flatten()
+    };
+    let (an, mo, jo, he) = (n(0, 4)?, n(5, 7)?, n(8, 10)?, n(11, 13)?);
+    let (mi, se) = if b.len() == 14 {
+        (0, 0)
+    } else {
+        if b[13] != b':' || b.len() < 20 || b[16] != b':' {
+            return None;
+        }
+        let fin = if b.len() == 20 {
+            true
+        } else {
+            // fraction de seconde facultative : `.123Z`
+            b[19] == b'.' && s[20..b.len() - 1].bytes().all(|c| c.is_ascii_digit()) && b.len() > 21
+        };
+        if !fin {
+            return None;
+        }
+        (n(14, 16)?, n(17, 19)?)
+    };
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&jo) || he > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    let t = epoch(an, mo, jo, he, mi, se);
+    let (a2, m2, j2, ..) = decomposer(t);
+    ((a2, m2, j2) == (an, mo, jo)).then_some(t)
+}
+
 pub fn maintenant() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -66,5 +103,16 @@ mod tests {
         assert_eq!(epoch(1970, 1, 1, 0, 0, 0), 0);
         assert_eq!(iso(epoch(2024, 2, 29, 23, 59, 59) + 1), "2024-03-01T00:00:00Z");
         assert_eq!(epoch(2013, 5, 24, 0, 0, 0), 1369353600); // jeu d'essai de la documentation SigV4 S3
+    }
+
+    #[test]
+    fn analyse_iso() {
+        let t = epoch(2026, 10, 17, 3, 0, 0);
+        assert_eq!(depuis_iso("2026-10-17T03:00:00Z"), Some(t));
+        assert_eq!(depuis_iso("2026-10-17T03Z"), Some(t));
+        assert_eq!(depuis_iso("2026-10-17T03:00:01.250Z"), Some(t + 1));
+        for mauvais in ["", "2026-10-17", "2026-10-17T03:00:00", "2026-02-30T03Z", "2026-10-17T25Z", "2026-10-17T03:00:00.Z", "x026-10-17T03Z"] {
+            assert_eq!(depuis_iso(mauvais), None, "{mauvais:?}");
+        }
     }
 }

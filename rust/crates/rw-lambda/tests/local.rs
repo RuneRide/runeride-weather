@@ -209,6 +209,21 @@ fn arome_025_groupes_et_source_des_isobares() {
         let nom = entree.as_bytes();
         assert!(z.windows(nom.len()).any(|w| w == nom), "{entree} absent du npz");
     }
+    // isobares finales : GeoJSON du viewer, <préfixe>/isobares/<modèle>/<tirage>/NN.geojson
+    let gj = srv.objet("v1/isobares/arome/2026-10-17T06Z/12.geojson");
+    let octets = std::fs::read(&gj).expect("GeoJSON des isobares absent");
+    let v: serde_json::Value = serde_json::from_slice(&octets).unwrap();
+    assert_eq!(v["type"], "FeatureCollection");
+    assert_eq!(v["proprietes"]["echeance"], 12);
+    assert_eq!(v["proprietes"]["tirage"], "2026-10-17T06:00:00Z");
+    assert!(v["features"].as_array().unwrap().iter().any(|f| f["properties"]["type"] == "isobare"));
+    assert_eq!(srv.meta("v1/isobares/arome/2026-10-17T06Z/12.geojson")["cache-control"], "public, max-age=31536000, immutable");
+    assert_eq!(r.etat["isobares_geojson"]["cle"], "v1/isobares/arome/2026-10-17T06Z/12.geojson");
+    assert_eq!(r.etat["isobares_geojson"]["octets"], octets.len());
+    // identique à la sortie du Python de référence quand elle est disponible (out/isobars, 52 GeoJSON)
+    if let Ok(py) = std::fs::read(racine().join("out/isobars/arome/2026-10-17T06Z/12.geojson")) {
+        assert!(py == octets, "GeoJSON différent du Python de référence");
+    }
 }
 
 #[test]

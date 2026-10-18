@@ -5,11 +5,9 @@
 
 pub mod erreur;
 pub mod handler;
-pub mod http;
 pub mod message;
-pub mod s3;
-pub mod sigv4;
 pub mod source;
-pub mod stockage;
-pub mod temps;
 pub mod traitement;
+
+// Modules déplacés dans `rw-aws` : mêmes chemins qu'avant (`rw_lambda::s3`, `::stockage`, …).
+pub use rw_aws::{http, s3, sigv4, stockage, temps};

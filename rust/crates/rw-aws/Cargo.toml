@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-aws"
+description = "Briques AWS minimales partagées par les fonctions Lambda : SigV4, client S3 (PUT/GET/HEAD/LIST/DELETE) et SQS (SendMessageBatch), sans le SDK AWS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rw_aws"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror.workspace = true
+serde_json.workspace = true
+# Client HTTP(S) synchrone, léger. TLS : rustls avec le fournisseur cryptographique **pur Rust**
+# (RustCrypto) : ni `ring` ni `aws-lc` (code C), donc compilation croisée arm64 sans compilateur C.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+hmac = "0.12"
+sha2 = "0.10"

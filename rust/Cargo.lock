@@ -1617,6 +1617,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "rw-aws"
+version = "0.1.0"
+dependencies = [
+ "hmac",
+ "rustls",
+ "rustls-rustcrypto",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "ureq",
+]
+
+[[package]]
 name = "rw-cli"
 version = "0.1.0"
 dependencies = [
@@ -1641,6 +1654,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rw-isobares"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "rayon",
+ "rw-cli",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "rw-lambda"
 version = "0.1.0"
 dependencies = [
@@ -1651,8 +1676,10 @@ dependencies = [
  "rayon",
  "rustls",
  "rustls-rustcrypto",
+ "rw-aws",
  "rw-cli",
  "rw-grib",
+ "rw-isobares",
  "rw-tiles",
  "serde",
  "serde_json",
@@ -1660,6 +1687,31 @@ dependencies = [
  "thiserror",
  "tokio",
  "ureq",
+]
+
+[[package]]
+name = "rw-manifeste"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lambda_runtime",
+ "rw-aws",
+ "serde_json",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "rw-poller"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "lambda_runtime",
+ "rw-aws",
+ "rw-cli",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

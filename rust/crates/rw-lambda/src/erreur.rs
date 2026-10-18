@@ -53,13 +53,5 @@ pub enum ErreurSource {
     Reseau(String),
 }
 
-/// Échec d'accès au stockage de sortie.
-#[derive(Debug, thiserror::Error)]
-pub enum ErreurStockage {
-    #[error("stockage : {0}")]
-    Io(String),
-    #[error("S3 HTTP {statut} sur {cle} : {corps}")]
-    Http { statut: u16, cle: String, corps: String },
-    #[error("configuration S3 : {0}")]
-    Configuration(String),
-}
+/// Échec d'accès au stockage de sortie (défini dans `rw-aws`, partagé avec le poller et le manifeste).
+pub use rw_aws::erreur::ErreurStockage;

@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-isobares"
+description = "Isobares (lissage, marching squares, Douglas-Peucker, extrema A / D) et GeoJSON compressé : port de pipeline/isobars"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Binaire `rw-isobares` (lit des canoniques .npz) : dépend de rw-cli pour la lecture des .npz
+cli = ["dep:rw-cli"]
+
+[lib]
+name = "rw_isobares"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rw-isobares"
+path = "src/bin/rw-isobares.rs"
+required-features = ["cli"]
+
+[dependencies]
+rayon.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+flate2.workspace = true
+rw-cli = { path = "../rw-cli", default-features = false, features = ["webp-pure"], optional = true }
+anyhow.workspace = true

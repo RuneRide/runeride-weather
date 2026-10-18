@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Client S3 minimal (PutObject, GetObject, HeadObject) signé SigV4, sans le SDK AWS.
+//! Client S3 minimal (PutObject, GetObject, HeadObject, ListObjectsV2, DeleteObject) signé SigV4, sans le SDK AWS.
 //!
 //! Choix et mesures : voir `docs/poc-rust/lambda.md`. Les identifiants viennent de l'environnement de la
 //! fonction (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, fournis par le runtime Lambda).
@@ -7,7 +7,8 @@
 use crate::erreur::ErreurStockage;
 use crate::http::{self, Delais};
 use crate::sigv4::{self, Demande};
-use crate::stockage::{cle_sure, Meta, Stockage};
+use crate::liste::{self, Listage};
+use crate::stockage::{cle_sure, prefixe_sur, Meta, Stockage};
 use crate::temps;
 use std::io::Read;
 use std::time::Duration;
@@ -63,35 +64,40 @@ impl StockageS3 {
         Ok(Self { cfg, ident, agent: http::agent(Delais::default(), http::AGENT_UTILISATEUR) })
     }
 
-    /// (URL, hôte signé, chemin canonique) d'une clé.
-    fn adresse(&self, cle: &str) -> (String, String, String) {
+    /// (URL, hôte signé, chemin canonique) d'une clé ; `cle` vide = le bucket lui-même (listage). `requete` : chaîne de
+    /// requête canonique (déjà triée et encodée), éventuellement vide.
+    fn adresse(&self, cle: &str, requete: &str) -> (String, String, String) {
         let ck = sigv4::encoder_chemin(cle);
-        match &self.cfg.endpoint {
+        let (base, hote, chemin) = match &self.cfg.endpoint {
             Some(e) => {
-                let base = e.trim_end_matches('/');
-                let hote = base.split("://").nth(1).unwrap_or(base).to_string();
-                let chemin = format!("/{}/{}", sigv4::encoder_segment(&self.cfg.bucket), ck);
-                (format!("{base}{chemin}"), hote, chemin)
+                let base = e.trim_end_matches('/').to_string();
+                let hote = base.split("://").nth(1).unwrap_or(&base).to_string();
+                let chemin = if cle.is_empty() { format!("/{}", sigv4::encoder_segment(&self.cfg.bucket)) } else { format!("/{}/{}", sigv4::encoder_segment(&self.cfg.bucket), ck) };
+                (base, hote, chemin)
             }
             None if self.cfg.bucket.contains('.') => {
                 // un bucket avec des points ne passe pas le certificat générique : accès « path-style »
                 let hote = format!("s3.{}.amazonaws.com", self.cfg.region);
-                let chemin = format!("/{}/{}", self.cfg.bucket, ck);
-                (format!("https://{hote}{chemin}"), hote, chemin)
+                let chemin = if cle.is_empty() { format!("/{}", self.cfg.bucket) } else { format!("/{}/{}", self.cfg.bucket, ck) };
+                (format!("https://{hote}"), hote, chemin)
             }
             None => {
                 let hote = format!("{}.s3.{}.amazonaws.com", self.cfg.bucket, self.cfg.region);
                 let chemin = format!("/{ck}");
-                (format!("https://{hote}{chemin}"), hote, chemin)
+                (format!("https://{hote}"), hote, chemin)
             }
-        }
+        };
+        let url = if requete.is_empty() { format!("{base}{chemin}") } else { format!("{base}{chemin}?{requete}") };
+        (url, hote, chemin)
     }
 
     /// Une requête signée, avec nouvelles tentatives sur erreurs transitoires (réseau, 5xx, 429, 408).
     /// Retourne (statut, corps tronqué à 64 Kio en cas d'erreur ou octets complets en lecture).
-    fn requete(&self, methode: &str, cle: &str, charge: &[u8], meta: Option<&Meta>) -> Result<(u16, Vec<u8>, Option<u64>), ErreurStockage> {
-        cle_sure(cle)?;
-        let (url, hote, chemin) = self.adresse(cle);
+    fn requete(&self, methode: &str, cle: &str, requete: &str, charge: &[u8], meta: Option<&Meta>) -> Result<(u16, Vec<u8>, Option<u64>), ErreurStockage> {
+        if !cle.is_empty() {
+            cle_sure(cle)?;
+        }
+        let (url, hote, chemin) = self.adresse(cle, requete);
         let hash = sigv4::sha256_hex(charge);
         let mut derniere = ErreurStockage::Io("aucun essai".into());
         for essai in 0..self.cfg.essais.max(1) {
@@ -111,7 +117,7 @@ impl StockageS3 {
             }
             entetes.sort();
             let auth = sigv4::autorisation(
-                &Demande { methode, chemin: &chemin, requete: "", entetes: &entetes, hash_charge: &hash, region: &self.cfg.region, service: "s3", date_amz: &date },
+                &Demande { methode, chemin: &chemin, requete, entetes: &entetes, hash_charge: &hash, region: &self.cfg.region, service: "s3", date_amz: &date },
                 &self.ident.cle_acces,
                 &self.ident.secret,
             );
@@ -135,6 +141,7 @@ impl StockageS3 {
                 }
                 "GET" => envoi(self.agent.get(&url)).call(),
                 "HEAD" => envoi(self.agent.head(&url)).call(),
+                "DELETE" => envoi(self.agent.delete(&url)).call(),
                 _ => return Err(ErreurStockage::Io(format!("méthode {methode} non gérée"))),
             };
             match resultat {
@@ -169,12 +176,12 @@ impl StockageS3 {
 impl Stockage for StockageS3 {
     fn ecrire(&self, cle: &str, octets: &[u8], meta: &Meta) -> Result<(), ErreurStockage> {
         // PutObject est atomique côté S3 : un lecteur voit l'ancien objet ou le nouveau, jamais un fichier partiel.
-        let (s, corps, _) = self.requete("PUT", cle, octets, Some(meta))?;
+        let (s, corps, _) = self.requete("PUT", cle, "", octets, Some(meta))?;
         if (200..300).contains(&s) { Ok(()) } else { Err(Self::echec(s, cle, &corps)) }
     }
 
     fn lire(&self, cle: &str) -> Result<Option<Vec<u8>>, ErreurStockage> {
-        let (s, corps, _) = self.requete("GET", cle, b"", None)?;
+        let (s, corps, _) = self.requete("GET", cle, "", b"", None)?;
         match s {
             200..=299 => Ok(Some(corps)),
             404 => Ok(None),
@@ -183,11 +190,40 @@ impl Stockage for StockageS3 {
     }
 
     fn taille(&self, cle: &str) -> Result<Option<u64>, ErreurStockage> {
-        let (s, corps, l) = self.requete("HEAD", cle, b"", None)?;
+        let (s, corps, l) = self.requete("HEAD", cle, "", b"", None)?;
         match s {
             200..=299 => l.map(Some).ok_or_else(|| ErreurStockage::Io(format!("HEAD {cle} sans Content-Length"))),
             404 => Ok(None),
             _ => Err(Self::echec(s, cle, &corps)),
         }
+    }
+
+    fn lister(&self, prefixe: &str, delimiteur: bool) -> Result<Listage, ErreurStockage> {
+        prefixe_sur(prefixe)?;
+        let mut res = Listage::default();
+        let mut suite: Option<String> = None;
+        for _ in 0..liste::PAGES_MAX {
+            let q = liste::requete_liste(prefixe, delimiteur.then_some('/'), suite.as_deref(), 1000);
+            let (s, corps, _) = self.requete("GET", "", &q, b"", None)?;
+            if !(200..300).contains(&s) {
+                return Err(Self::echec(s, prefixe, &corps));
+            }
+            let page = liste::analyser_page(&String::from_utf8_lossy(&corps)).map_err(ErreurStockage::Io)?;
+            res.objets.extend(page.objets);
+            res.prefixes.extend(page.prefixes);
+            if !page.tronquee {
+                res.objets.sort_by(|a, b| a.cle.cmp(&b.cle));
+                res.prefixes.sort();
+                return Ok(res);
+            }
+            suite = page.suite;
+        }
+        Err(ErreurStockage::Io(format!("listage {prefixe} : plus de {} pages", liste::PAGES_MAX)))
+    }
+
+    fn supprimer(&self, cle: &str) -> Result<(), ErreurStockage> {
+        let (s, corps, _) = self.requete("DELETE", cle, "", b"", None)?;
+        // S3 répond 204 même si la clé n'existe pas ; 404 (bucket sans versionnage ou serveur de test) est aussi un succès
+        if (200..300).contains(&s) || s == 404 { Ok(()) } else { Err(Self::echec(s, cle, &corps)) }
     }
 }

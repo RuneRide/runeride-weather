@@ -15,7 +15,9 @@ name = "bootstrap"
 path = "src/bin/bootstrap.rs"
 
 [dependencies]
+rw-aws = { path = "../rw-aws" }
 rw-cli = { path = "../rw-cli", default-features = false, features = ["webp-pure"] }
+rw-isobares = { path = "../rw-isobares" }
 rw-grib = { path = "../rw-grib", default-features = false, features = ["aec-rust-aec"] }
 rw-tiles = { path = "../rw-tiles", default-features = false, features = ["webp-pure"] }
 anyhow.workspace = true

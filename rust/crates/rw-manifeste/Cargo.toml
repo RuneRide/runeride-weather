@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-manifeste"
+description = "Fonction AWS Lambda « manifeste » (binaire `rw-manifeste`, `bootstrap` dans le zip) : agrège les états d'échéance de S3 en manifest.json (latest_complete, rétention)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rw_manifeste"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rw-manifeste"
+path = "src/bin/rw-manifeste.rs"
+
+[dependencies]
+rw-aws = { path = "../rw-aws" }
+anyhow.workspace = true
+serde_json.workspace = true
+# lecture des .npz (zip + npy) du masque de domaine
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+lambda_runtime = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }

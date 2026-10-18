@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-poller"
+description = "Fonction AWS Lambda « poller » (binaire `rw-poller`, `bootstrap` dans le zip) : liste le S3 Météo-France chez OVH et met en file SQS les échéances à traiter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rw_poller"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rw-poller"
+path = "src/bin/rw-poller.rs"
+
+[dependencies]
+rw-aws = { path = "../rw-aws" }
+anyhow.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+lambda_runtime = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
+
+[dev-dependencies]
+# vérifie que les noms de fichiers GRIB requis sont ceux du worker (`rw-cli`), sans dépendance à l'exécution
+rw-cli = { path = "../rw-cli", default-features = false, features = ["webp-pure"] }
