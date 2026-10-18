@@ -149,6 +149,7 @@ Déploiement arm64 (non fait) :
 - Rust pur : `rustup target add aarch64-unknown-linux-musl && RUSTFLAGS="-C linker=rust-lld" cargo build --release -p rw-cli --no-default-features --features webp-pure --target aarch64-unknown-linux-musl` (testé, binaire de 0,99 Mo ; runtime `provided.al2023`, arm64).
 - Avec libwebp : `cargo lambda build --release --arm64` (cargo-lambda utilise zig comme éditeur de liens et compilateur C) ou `cargo zigbuild --target aarch64-unknown-linux-gnu`.
 - Adaptations nécessaires pour Lambda, non écrites : lecture des GRIB depuis S3 (un fichier de groupe 0,025° de 6 échéances est lu à chaque invocation), écriture des PMTiles dans S3, point d'entrée `lambda_runtime`. Le binaire actuel travaille sur fichiers locaux.
+- Suite : le binaire Lambda (`rw-lambda`, source HTTP, sortie S3, SQS, idempotence, état d'échéance) est décrit dans [lambda.md](lambda.md).
 
 ## 8. Limites et points ouverts
 

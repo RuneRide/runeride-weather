@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-lambda"
+description = "Fonction AWS Lambda (binaire `bootstrap`) : un message SQS = une échéance (modèle, tirage) → PMTiles dans S3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "rw_lambda"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bootstrap"
+path = "src/bin/bootstrap.rs"
+
+[dependencies]
+rw-cli = { path = "../rw-cli", default-features = false, features = ["webp-pure"] }
+rw-grib = { path = "../rw-grib", default-features = false, features = ["aec-rust-aec"] }
+rw-tiles = { path = "../rw-tiles", default-features = false, features = ["webp-pure"] }
+anyhow.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+# Client HTTP(S) synchrone, léger. TLS : rustls avec le fournisseur cryptographique **pur Rust**
+# (RustCrypto) : ni `ring` ni `aws-lc` (code C), donc compilation croisée arm64 sans compilateur C.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "rustls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls-rustcrypto = "0.0.2-alpha"
+# SigV4 pour le client S3 minimal
+hmac = "0.12"
+sha2 = "0.10"
+# Runtime Lambda
+lambda_runtime = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
+aws_lambda_events = { version = "1", default-features = false, features = ["sqs"] }

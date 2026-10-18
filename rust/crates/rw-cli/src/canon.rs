@@ -228,32 +228,67 @@ fn axes(g: &Grille) -> Result<(Vec<f32>, Vec<f32>, bool)> {
     Ok((lat.into_iter().map(arr).collect(), lon.into_iter().map(arr).collect(), retourner))
 }
 
-/// Produit le canonique d'une échéance. `dossiers` : où chercher les GRIB.
-pub fn ingerer(modele: &str, tirage: &str, step: u32, dossiers: &[PathBuf], opts: &Options) -> Result<(Canon, Vec<String>, Etapes)> {
-    let mut et = Etapes::default();
-    let t = Instant::now();
+/// Groupes d'étiquettes dont les fichiers sont nécessaires à l'échéance `step` : l'échéance n, et
+/// l'échéance n−1 si elle est dans un autre fichier et si `step ≥ 2` (à l'échéance 1 le cumul précédent
+/// est nul par construction, comme dans `canon.construire` du Python : le fichier n'est pas lu).
+pub fn etiquettes_requises(modele: &str, step: u32) -> Vec<String> {
     let label_n = etiquette(modele, step);
     let mut labels = vec![label_n.clone()];
-    if step >= 1 {
+    if step >= 2 {
         let lp = etiquette(modele, step - 1);
         if lp != label_n {
             labels.push(lp);
         }
     }
+    labels
+}
+
+/// Noms des fichiers GRIB nécessaires à l'échéance (SP1 et SP2 de chaque étiquette), dans l'ordre de lecture.
+pub fn noms_requis(modele: &str, tirage: &str, step: u32) -> Result<Vec<String>> {
+    let mut v = Vec::new();
+    for l in etiquettes_requises(modele, step) {
+        for p in PAQUETS {
+            v.push(nom_fichier(modele, p, &l, tirage)?);
+        }
+    }
+    Ok(v)
+}
+
+/// Produit le canonique d'une échéance. `dossiers` : où chercher les GRIB.
+pub fn ingerer(modele: &str, tirage: &str, step: u32, dossiers: &[PathBuf], opts: &Options) -> Result<(Canon, Vec<String>, Etapes)> {
+    ingerer_octets(
+        modele,
+        tirage,
+        step,
+        &mut |nom| {
+            let chemin = localiser(nom, dossiers).ok_or_else(|| anyhow!("fichier absent : {nom}"))?;
+            std::fs::read(&chemin).with_context(|| chemin.display().to_string())
+        },
+        opts,
+    )
+}
+
+/// Comme [`ingerer`], mais les octets de chaque fichier GRIB (par nom, voir [`noms_requis`]) viennent de `fournir`
+/// (téléchargement, mémoire…).
+pub fn ingerer_octets(
+    modele: &str,
+    tirage: &str,
+    step: u32,
+    fournir: &mut dyn FnMut(&str) -> Result<Vec<u8>>,
+    opts: &Options,
+) -> Result<(Canon, Vec<String>, Etapes)> {
+    let mut et = Etapes::default();
+    let t = Instant::now();
     // fichiers SP1 / SP2 des étiquettes utiles ; le groupe précédent n'est lu que si l'échéance ≥ 2
     let mut fichiers: Vec<(String, Vec<Fichier>)> = Vec::new();
-    for (k, l) in labels.iter().enumerate() {
-        if k == 1 && step < 2 {
-            continue;
-        }
+    for l in etiquettes_requises(modele, step) {
         let mut v = Vec::new();
         for p in PAQUETS {
-            let nom = nom_fichier(modele, p, l, tirage)?;
-            let chemin = localiser(&nom, dossiers).ok_or_else(|| anyhow!("fichier absent : {nom}"))?;
-            let octets = std::fs::read(&chemin).with_context(|| chemin.display().to_string())?;
+            let nom = nom_fichier(modele, p, &l, tirage)?;
+            let octets = fournir(&nom)?;
             v.push(Fichier { nom, octets });
         }
-        fichiers.push((l.clone(), v));
+        fichiers.push((l, v));
     }
     et.lecture_fichiers_s = t.elapsed().as_secs_f64();
 
