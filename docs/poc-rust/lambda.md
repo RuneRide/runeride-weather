@@ -170,7 +170,7 @@ Déclenchement conseillé de la Lambda « manifeste » : événement S3 sur le s
 
 `_isobares/NN.npz` (AROME, toutes échéances) est le champ canonique `mslp` en pascals avec `lat`, `lon` et `meta` (`model`, `run`, `step`, …) : exactement l'entrée de `pipeline.isobars.calcul.charger`. **Vérification [M]** : `pipeline.isobars.calcul.traiter` exécuté sur ce fichier (échéance 48) et sur le canonique Python de référence produit des GeoJSON **identiques octet pour octet** (30 lignes, 1 extremum, 93 442 octets). Le canonique `mslp` lui-même est identique bit à bit au Python.
 
-**Le calcul des isobares n'est pas porté en Rust.** Il représente environ 1 000 lignes de Python numérique : lissage gaussien séparable (σ = 4 et σ = 8 mailles), contours par marching squares avec assemblage des segments en lignes, simplification de Douglas-Peucker en kilomètres, détection des extrema (proéminence), puis conversion en tuiles vectorielles MVT avec découpe et PMTiles (`mvt.py`, 267 lignes) et `validation.py`. De plus, le format de production des isobares (GeoJSON ou tuiles MVT dans un PMTiles) n'est pas arrêté : [../poc-j3/isobares.md](../poc-j3/isobares.md) l'évalue seulement. Tant que ce choix et ce port ne sont pas faits, le Python peut tourner sur `_isobares/NN.npz` hors de cette fonction.
+**Mise à jour : le calcul des isobares est porté en Rust** (crate `rw-isobares`, [isobares.md](isobares.md)). La sortie est un GeoJSON identique octet pour octet à celle du Python, écrit sous `v1/isobares/<modèle>/<tirage>/NN.geojson` (la politique IAM doit donc couvrir `v1/isobares/*`). `mvt.py` et `validation.py` restent en Python.
 
 ## 9. Mesures et exactitude
 
@@ -220,7 +220,8 @@ Le binaire a aussi été exercé avec la vraie bibliothèque `lambda_runtime` co
       "Action": ["s3:PutObject", "s3:GetObject"],
       "Resource": [
         "arn:aws:s3:::BUCKET/v1/arome/*",
-        "arn:aws:s3:::BUCKET/v1/arome-hd/*"
+        "arn:aws:s3:::BUCKET/v1/arome-hd/*",
+        "arn:aws:s3:::BUCKET/v1/isobares/*"
       ]
     },
     {
