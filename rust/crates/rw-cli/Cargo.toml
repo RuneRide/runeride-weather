@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-cli"
+description = "Chaîne GRIB2 → champs canoniques → PMTiles (une invocation = une échéance), binaire `rw`"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["webp-c", "webp-pure"]
+# webp-c : libwebp compilé statiquement (poids identiques au Python) ; sinon image-webp (Rust pur)
+webp-c = ["rw-tiles/webp-c"]
+webp-pure = ["rw-tiles/webp-pure"]
+
+[lib]
+name = "rw_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rw"
+path = "src/main.rs"
+
+[dependencies]
+rw-grib = { path = "../rw-grib", default-features = false, features = ["aec-rust-aec"] }
+rw-tiles = { path = "../rw-tiles", default-features = false }
+anyhow.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]

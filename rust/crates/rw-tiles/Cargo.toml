@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-tiles"
+description = "Tuilage Web Mercator, quantification, WebP sans perte et PMTiles v3 (profils reduit2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# webp-c : libwebp (C, compilé statiquement par la crate `webp`) ; webp-pure : image-webp (Rust pur)
+default = ["webp-c", "webp-pure"]
+webp-c = ["dep:webp"]
+webp-pure = ["dep:image-webp"]
+
+[dependencies]
+rayon.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+image-webp = { version = "0.2", optional = true }
+webp = { version = "0.3", default-features = false, optional = true }
+
+[dev-dependencies]
+image-webp = "0.2"

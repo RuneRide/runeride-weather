@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "rw-grib"
+description = "Lecteur GRIB2 minimal (grille lat/lon régulière, gabarit 5.42 CCSDS, masque de valeurs manquantes)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["aec-rust-aec"]
+aec-tensogram = ["dep:tensogram-szip"]
+aec-rust-aec = ["dep:rust-aec"]
+aec-oxiarc = ["dep:oxiarc-szip"]
+
+[dependencies]
+thiserror.workspace = true
+rayon.workspace = true
+tensogram-szip = { version = "0.24", optional = true }
+rust-aec = { version = "0.1", optional = true }
+oxiarc-szip = { version = "0.4", optional = true }
+
+[dev-dependencies]
+# encodeur « sans compression » d'oxiarc-szip : sert à fabriquer des flux AEC valides dans les tests
+oxiarc-szip = "0.4"
