@@ -133,3 +133,47 @@ Une plage de 63,5 K en 254 niveaux à 0,25 K ne couvre ni les canicules (au-dess
 1. Adopter `reduit2` avec plage dynamique par fichier (D13 révisée, D14) ; revoir le poids d'un tirage sur un tirage d'été.
 2. La visualisation décode `quant_step` pour `contrat` et `reduit`, mais **`?profil=reduit2` n'est pas encore prévu** ; à ajouter avec l'intégration du fond de carte.
 3. `wind8` : validé sur un seul tirage (le vent moyen max est 25,5 m/s) ; à rejouer sur un tirage de tempête.
+
+---
+
+# Puissance de calcul d'un tirage (mesures du 18 octobre 2026)
+
+Mesures sur la machine de développement (20 cœurs, 61 Go de RAM, partagée), profil `reduit2`, échéance 30. **Mesuré** = chronométré ; **calculé** = obtenu à partir des mesures.
+
+## Tuilage d'une échéance, selon le nombre de processus
+
+| Processus | AROME HD : mur / CPU / mémoire totale | AROME 0,025° : mur / CPU / mémoire |
+|---|---|---|
+| 1 | 19,9 s / 21,2 s / 229 Mo | 14,7 s / 16,0 s / 86 Mo |
+| 2 | 10,1 s / 20,7 s / 640 Mo | |
+| 4 | 5,4 s / 21,2 s / 1 058 Mo | 3,9 s / 15,9 s / 347 Mo |
+| 8 | 3,4 s / 24,2 s / 1 896 Mo | |
+| 20 | 2,5 s / 35,8 s / 4 406 Mo | |
+
+À 20 processus, le CPU par échéance monte de 21 à 36 s : au-delà de 8 processus, on paie de la contention sans gain notable.
+
+## Ingestion
+
+AROME HD, une échéance (SP1 + SP2, 9 variables, 54,8 Mo de sortie) : **7,1 s de mur, 8,0 s de CPU, 0,89 Go de mémoire** (mesuré). AROME 0,025° : ≈ 1 s par échéance, 73 s pour 52, pic 1,1 Go (rapporté par l'agent d'ingestion).
+
+## Un tirage complet (calculé)
+
+| Étape | CPU (52 échéances) |
+|---|---|
+| Ingestion HD | 52 × 8,0 s ≈ 420 s |
+| Ingestion AROME | ≈ 73 s |
+| Tuilage HD | 52 × 21 s ≈ 1 090 s |
+| Tuilage AROME | 52 × 16 s ≈ 830 s |
+| Isobares | ≈ 42 s |
+| **Total** | **≈ 2 455 s ≈ 41 min de CPU** |
+
+Durée sur une machine : 1 vCPU ≈ 41 min ; 2 ≈ 21 min ; **4 ≈ 11 min** ; 8 ≈ 6 min (hypothèse : l'ingestion se parallélise par échéance, ce qui reste à faire). Par jour (8 tirages) : ≈ 5,5 h de CPU.
+
+## Disque et réseau d'un tirage (mesuré)
+
+GRIB HD 2,19 Go (+ AROME ≈ 0,70 Go) ; champs canoniques HD 2,79 Go + AROME 0,46 Go ; tuiles 0,55 + 0,44 Go ; isobares 0,01 Go. Environ 7 Go si tout est gardé, moins de 2 Go en traitant échéance par échéance. Téléchargement ≈ 2,9 Go par tirage (47 Mo/s mesuré par l'agent en HD).
+
+## Dimensionnement recommandé
+
+4 vCPU, 8 Go de RAM, 20 Go de disque temporaire, lancé à la demande à chaque tirage (utilisation d'environ 6 % sur la journée). **Non couvert** : paquets d'altitude (HP1, IP), autres modèles, tirage d'été ou de tempête, téléchargement depuis AWS, vitesse d'un cœur AWS (± 30 % possible), prix AWS à confirmer.
+
