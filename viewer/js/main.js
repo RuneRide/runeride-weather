@@ -5,8 +5,9 @@ import { COUCHES, TUILE, couleurPalette, paramsDecodage } from './config.js';
 import { CoucheDonnees, tuilesVisibles } from './couche-gl.js';
 import { SourceCompteuse, archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surTuile } from './donnees.js';
 import { Surcouche } from './fleches.js';
-import { AROME, AROME_HD, attribution, choisirTirage, cheminFichier, plageTemps, resoudre, tirages } from './modele-auto.js';
+import { AROME, AROME_HD, attribution, choisirTirage, cheminFichier, libelleModele, plageTemps, resoudre, tirages } from './modele-auto.js';
 import * as IL from './integration-logique.js';
+import * as FT from './format-temps.js';
 import { ParticulesVent } from './particules.js';
 import { ajouterIsobares, echeanceCourante, majEcheance, retirerIsobares } from './isobares.js';
 
@@ -17,6 +18,7 @@ if (params.get('ui') === '0') document.documentElement.classList.add('sans-ui');
 const mesures = { nom: params.get('nom') || 'mesures', date: new Date().toISOString(), jalons: {} };
 const jalon = (nom) => { mesures.jalons[nom] = Math.round((performance.now()) * 10) / 10; };
 const H = 3600e3;
+const FUSEAU = params.get('fuseau') || FT.FUSEAU;   // fuseau de l'heure locale (Europe/Paris par défaut)
 
 // ---------------------------------------------------------------- état
 const MONTAGES = { reduit2: '/data-reduit2', data: '/data', reduit: '/data-reduit', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
@@ -178,37 +180,80 @@ function precharger(c, res) {
 
 // ---------------------------------------------------------------- heure, pastille, attribution
 function majHeure() {
-  const p = IL.formaterTemps(etat.tValide);
-  $('heure-locale').textContent = p.local; $('heure-decalage').textContent = p.decalage;
-  $('heure').title = p.infobulle;
+  const e = FT.etiquetteFrise(etat.tValide, FUSEAU);
+  $('heure-locale').textContent = e.local; $('heure-decalage').textContent = '· ' + e.utc;
+  $('heure').title = e.infobulle;
   const t = etat.affiche && etat.affiche.tirage;
-  const ech = t ? ((etat.tValide - Date.parse(t.run)) / H) : null;
-  $('heure-detail').textContent = `${p.utc} UTC` + (t ? ` · +${ech.toFixed(1).replace('.', ',')} h · tirage ${t.id.slice(11, 13)} h` : '');
+  $('heure-detail').textContent = t ? `${FT.formatEcheance(Date.parse(t.run), etat.tValide)} · tirage du ${FT.dateNumerique(Date.parse(t.run), 'UTC')} à ${FT.heureCourte(Date.parse(t.run), 'UTC')} UTC` : '';
   const { debut, fin } = plage();
   const f = $('frise');
   f.min = 0; f.max = (fin - debut) / H;
   if (document.activeElement !== f || etat.lecture) f.value = IL.positionFrise(etat.tValide, debut, fin);
 }
+/** Lignes du détail du tirage (infobulle et volet tactile). */
+function lignesDetail(a, avis) {
+  const c = etat.couche, maintenant = Date.now(), lignes = [];
+  const run = m => tirages(etat.manifest, m.modele).find(r => r.id === m.id);
+  const libelle = m => libelleModele(m, etat.manifest);
+  if (c.pseudo || (a && a.tirage)) {
+    const modele = c.pseudo ? AROME : a.modele, r = c.pseudo ? IL.tirageIsobares(etat.manifest) : run({ modele, id: a.tirage.id });
+    if (r) {
+      const d = FT.decrireTirage({ run: r.run, tValide: etat.tValide, modele, libelle: libelle(modele) });
+      lignes.push(['modele', libelle(modele)], ['', `${d.tirage} · ${d.echeance}`]);
+      if (r.traite) lignes.push(['fraicheur', FT.formatTraite(r.traite, maintenant, FUSEAU)]);
+    }
+  }
+  if ((etat.isobares && !c.pseudo)) {
+    const r = IL.tirageIsobares(etat.manifest);
+    if (r) lignes.push(['autre', FT.ligneAutreSource({ nom: 'Pression', libelle: libelle(AROME), run: r.run, tValide: etat.tValide, tz: FUSEAU })]);
+  }
+  if (etat.particules && !c.pseudo && c.cle !== 'vent') {
+    const v = champVent();
+    if (v && v.tirage && !(a && a.tirage && v.tirage.modele === a.modele && v.tirage.id === a.tirage.id)) {
+      lignes.push(['autre', FT.ligneAutreSource({ nom: 'Particules', libelle: libelle(v.tirage.modele), run: v.tirage.run, tValide: etat.tValide, tz: FUSEAU })]);
+    }
+  }
+  if (avis) lignes.push(['autre', avis]);
+  return lignes;
+}
 function majAffichageModele() {
   const a = etat.affiche, c = etat.couche, vue = etat.vue;
-  let pastille, avis = '';
+  let long, court, avis = '';
+  const decrire = (r, modele, id) => FT.decrireTirage({ run: r.run, tValide: etat.tValide, modele, libelle: libelleModele(modele, etat.manifest) });
   if (c.pseudo) {
-    pastille = `AROME 0,025° · tirage ${(IL.tirageIsobares(etat.manifest)?.id || '').slice(11, 13)} h UTC`;
-  } else {
-    pastille = IL.textePastille(a, etat.manifest);
+    const r = IL.tirageIsobares(etat.manifest);
+    const d = r && decrire(r, AROME);
+    long = d ? d.longue : 'Pression'; court = d ? d.compacte : 'Pression';
+  } else if (a && a.tirage) {
+    const r = tirages(etat.manifest, a.modele).find(q => q.id === a.tirage.id) || { run: a.tirage.run };
+    const d = decrire(r, a.modele);
+    long = d.longue; court = d.compacte;
     avis = etat.enAttente
       ? `Bascule vers ${nomModele(etat.desire.modele)} : chargement…`
       : IL.avisRepli(a, { mode: etat.mode, manifest: etat.manifest, zoom: vue?.zoom ?? null });
-    if (!a && etat.desire && !etat.desire.tirage) avis = 'Échéance non publiée pour cette couche.';
+  } else { long = court = IL.textePastille(a, etat.manifest); }
+  if (!a && etat.desire && !etat.desire.tirage) avis = 'Échéance non publiée pour cette couche.';
+  // pression d'un autre modèle ou tirage que la pastille : à dire pour cette couche
+  const iso = etat.isobares || c.pseudo, ri = IL.tirageIsobares(etat.manifest);
+  if (iso && ri && !c.pseudo && !(a && a.modele === AROME && a.tirage && a.tirage.id === ri.id)) {
+    avis = (avis ? avis + ' ' : '') + `Pression : AROME, tirage du ${FT.dateNumerique(Date.parse(ri.run), 'UTC')} à ${FT.heureCourte(Date.parse(ri.run), 'UTC')} UTC.`;
   }
-  const iso = etat.isobares || c.pseudo;
-  if (iso && a && a.modele === AROME_HD) avis = (avis ? avis + ' ' : '') + 'Pression : AROME (pas de pression en HD).';
-  $('pastille').textContent = pastille;
+  const lignes = lignesDetail(a, avis);
+  $('pastille').querySelector('.long').textContent = long;
+  $('pastille').querySelector('.court').textContent = court;
   $('pastille').dataset.modele = a ? a.modele : '';
-  $('avis').textContent = avis; $('avis').hidden = !avis;
+  $('pastille').title = lignes.map(l => l[1]).join('\n') || long;
+  const det = $('detail-tirage');
+  if (!det.hidden) rendreDetail(lignes);
+  etat.lignesDetail = lignes;
+  $('avis').textContent = avis; $('avis').hidden = !avis; $('avis').title = avis;
   const modeleAttrib = c.pseudo ? AROME : (a && a.modele);
   $('attrib-modele').textContent = attribution(modeleAttrib, etat.manifest);
   for (const b of $('modeles').children) b.setAttribute('aria-pressed', String(b.dataset.m === etat.mode));
+}
+function rendreDetail(lignes) {
+  const det = $('detail-tirage'); det.textContent = '';
+  for (const [cls, txt] of lignes) { const p = document.createElement('p'); if (cls) p.className = cls; p.textContent = txt; det.appendChild(p); }
 }
 
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
@@ -277,7 +322,7 @@ function champVent() {
   if (!t) { const autre = modele === AROME_HD ? AROME : AROME_HD; t = choisirTirage({ modele: autre, variable: 'wind10', tValide: etat.tValide, manifest: etat.manifest }); }
   if (!t) return null;
   const f = fichiersDe(t), [zmin, zmax] = zoomsDe(t.modele, 'wind10');
-  return { ...f, zmin, zmax, dec: cv.dec };
+  return { ...f, zmin, zmax, dec: cv.dec, tirage: t };
 }
 function majParticulesChamp() {
   if (!particules) return;
@@ -393,6 +438,19 @@ function ecrireHash() {
     zoom: map.getZoom(), mode: etat.mode, particules: etat.particules, isobares: etat.isobares }));
 }
 
+/** Applique un hash modifié dans le même onglet (lien collé, retour arrière) : vue, couche, temps, modèle, superpositions. */
+async function appliquerHash(h) {
+  if (h.mode) etat.mode = h.mode;
+  if (h.particules !== null) { etat.particules = h.particules; etat.particulesExplicite = true; }
+  if (h.isobares !== null) etat.isobares = h.isobares;
+  if (h.centre && h.zoom != null) { map.jumpTo({ center: [h.centre.lng, h.centre.lat], zoom: h.zoom }); majVue(); }
+  const cible = h.couche === 'pression' ? PRESSION : COUCHES.find(c => c.cle === h.couche);
+  if (cible && cible !== etat.couche) await choisirCouche(cible);
+  const { debut, fin } = plage();
+  if (h.tValide !== null) etat.tValide = Math.min(fin, Math.max(debut, h.tValide));
+  appliquer(); majBoutons();
+}
+
 function brancherInterface() {
   // la légende se place juste au-dessus de la barre du bas, quelle que soit sa hauteur (mobile : attribution sur 2 lignes)
   new ResizeObserver(() => document.documentElement.style.setProperty('--h-bas', $('bas').offsetHeight + 'px')).observe($('bas'));
@@ -403,6 +461,12 @@ function brancherInterface() {
   });
   $('frise').addEventListener('input', e => { const { debut, fin } = plage(); etat.tValide = IL.tempsDepuisFrise(parseFloat(e.target.value), debut, fin); appliquer(); });
   $('frise').addEventListener('change', ecrireHash);
+  $('pastille').addEventListener('click', () => {
+    const det = $('detail-tirage'); det.hidden = !det.hidden;
+    $('pastille').setAttribute('aria-expanded', String(!det.hidden));
+    if (!det.hidden) rendreDetail(etat.lignesDetail || []);
+  });
+  window.addEventListener('hashchange', () => appliquerHash(IL.lireHash(location.hash)));
   for (const b of $('modeles').children) b.addEventListener('click', () => { etat.mode = b.dataset.m; appliquer(); ecrireHash(); });
   $('opt-particules').addEventListener('click', () => { etat.particules = !etat.particules; etat.particulesExplicite = true; majParticulesChamp(); surcouche.planifier(etatSurcouche()); ecrireHash(); });
   $('opt-isobares').addEventListener('click', () => {
@@ -495,7 +559,7 @@ window.__app = {
     return { couche: cleCouche, modele, echeances: n, tuiles_visibles_par_echeance: tv.length, octets: stats.octetsDonnees - o0,
       requetes: stats.requetesDonnees - r0, ms: Math.round(performance.now() - t0), z: tv[0][0] };
   },
-  texte() { return { pastille: $('pastille').textContent, avis: $('avis').textContent, attribution: $('attrib').textContent, heure: $('heure-locale').textContent,
+  texte() { return { pastille: $('pastille').querySelector('.long').textContent, compacte: $('pastille').querySelector('.court').textContent, detail: (etat.lignesDetail || []).map(l => l[1]), titre: $('pastille').title, avis: $('avis').textContent, attribution: $('attrib').textContent, heure: $('heure-locale').textContent,
     heureDetail: $('heure-detail').textContent, titre: $('heure').title }; },
   fleches(on) { etat.sansFleches = !on; surcouche.planifier(etatSurcouche()); },
   /** Alignement fond / météo : sur une bande de lignes traversant une côte, position de la plus forte variation du fond

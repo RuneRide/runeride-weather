@@ -85,7 +85,8 @@ def _variable_complete(variable, steps, horizon):
 
 
 def inventaire(dossier_tuiles):
-    """{modèle: {tirage: {variable: (échéances, en-tête, métadonnées)}}} ; dossiers vides ignorés."""
+    """{modèle: {tirage: {variable: (échéances, en-tête, métadonnées, mtime)}}} ; dossiers vides ignorés.
+    mtime = date de modification (s, epoch) du fichier PMTiles le plus récent de la variable."""
     res = {}
     for modele in sorted(os.listdir(dossier_tuiles)):
         dm = os.path.join(dossier_tuiles, modele)
@@ -102,7 +103,8 @@ def inventaire(dossier_tuiles):
                 if not steps:
                     continue
                 entete, meta = lire_metadonnees(os.path.join(dv, fichiers[steps[0]]))
-                res.setdefault(modele, {}).setdefault(tirage, {})[variable] = (steps, entete, meta)
+                mtime = max(os.path.getmtime(os.path.join(dv, f)) for f in fichiers.values())   # dernier fichier écrit
+                res.setdefault(modele, {}).setdefault(tirage, {})[variable] = (steps, entete, meta, mtime)
     return res
 
 
@@ -147,8 +149,10 @@ def construire(dossier_tuiles, dossier_canon=None, generated=None, tol=0.04):
                 steps = vs[v][0]
                 entrees[v] = {"steps": steps, "complete": _variable_complete(v, steps, horizon)}
             tous = [s for e in entrees.values() for s in e["steps"]]
+            # `traite` : dernier traitement CHEZ NOUS (date de modification des PMTiles), pas la publication chez Météo-France
+            traite = dt.datetime.fromtimestamp(max(vs[v][3] for v in entrees), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             runs.append({
-                "run": run, "id": tirage,
+                "run": run, "id": tirage, "traite": traite,
                 "valid_debut": _iso_plus(run, min(tous)), "valid_fin": _iso_plus(run, max(tous)),
                 "complete": all(v in entrees and entrees[v]["complete"] for v in toutes),
                 "path": "%s/%s" % (modele, tirage),

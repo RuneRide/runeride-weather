@@ -112,6 +112,17 @@ class TestConstruction(unittest.TestCase):
         self.assertEqual(r6["valid_fin"], "2026-10-18T00:00:00Z")
         self.assertTrue(runs["2026-10-17T03Z"]["variables"]["gust10"]["complete"])  # 1..51 attendu
 
+    def test_date_de_traitement(self):
+        # `traite` = date de modification du fichier le plus récent du tirage (traitement chez nous, pas publication Météo-France)
+        for modele, runs in self.m["models"].items():
+            for r in runs["runs"]:
+                self.assertRegex(r["traite"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        import calendar, glob, time
+        fichiers = glob.glob(os.path.join(self.t, "arome", "2026-10-17T06Z", "*", "*.pmtiles"))
+        attendu = max(os.path.getmtime(f) for f in fichiers)
+        r = self.m["models"]["arome"]["runs"][0]
+        self.assertLess(abs(calendar.timegm(time.strptime(r["traite"], "%Y-%m-%dT%H:%M:%SZ")) - attendu), 1.5)
+
     def test_gust10_sans_echeance_zero_est_complet(self):
         r = self.m["models"]["arome"]["runs"][0]
         self.assertTrue(r["variables"]["gust10"]["complete"])

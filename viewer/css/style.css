@@ -97,3 +97,25 @@ h1 small { font-weight: 400; color: var(--discret); font-size: 12px; margin-left
 #etiquette { flex: 1 1 auto; }
 #heure-decalage { font-size: 11px; color: var(--discret); font-weight: 400; }
 @media (max-width: 420px) { #heure-locale { font-size: 16px; } #heure b { font-size: 16px; } }
+
+/* --- tirage complet : pastille cliquable (zone tactile élargie), détail, forme compacte sur mobile */
+#pastille { position: relative; min-height: 0; min-width: 0; padding: 3px 10px; cursor: pointer; }
+#pastille::before { content: ""; position: absolute; inset: -9px -4px; }
+#pastille .court { display: none; }
+#detail-tirage { margin-top: 4px; padding: 8px 10px; max-width: min(340px, calc(100vw - 24px)); text-align: left; border-radius: 10px;
+  background: rgba(23, 25, 28, 0.96); border: 1px solid var(--accent); font-size: 12px; line-height: 1.45; pointer-events: auto; }
+#detail-tirage[hidden] { display: none; }
+#detail-tirage p { margin: 0 0 4px; } #detail-tirage p:last-child { margin: 0; }
+#detail-tirage .modele { font-weight: 650; } #detail-tirage .fraicheur { color: var(--discret); } #detail-tirage .autre { color: var(--accent); }
+#heure-detail { white-space: normal; }
+#heure-decalage { margin-left: 4px; }
+@media (max-width: 420px) {
+  #pastille .long { display: none; } #pastille .court { display: inline; }
+  #avis { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #etiquette { max-width: calc(100vw - 150px); }
+}
+#etiquette { position: relative; }
+#detail-tirage { position: absolute; right: 0; top: 100%; z-index: 6; width: max-content; }
+#avis { display: block; margin-top: 2px; max-width: min(520px, 100%); }
+#avis[hidden] { display: none; }
+@media (max-width: 420px) { #etiquette { max-width: none; } #avis { max-width: 100%; } }

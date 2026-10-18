@@ -18,7 +18,10 @@
   <header id="haut">
     <div id="ligne-titre">
       <h1>Les Augures</h1>
-      <div id="etiquette"><span id="pastille" role="status" title="Modèle et tirage affichés"></span><span id="avis" hidden></span></div>
+      <div id="etiquette">
+        <button id="pastille" aria-expanded="false" aria-controls="detail-tirage" title="Modèle et tirage affichés : toucher pour le détail"><span class="long"></span><span class="court"></span></button>
+        <div id="detail-tirage" hidden role="region" aria-label="Détail du tirage"></div>
+      </div>
     </div>
     <nav id="couches" aria-label="Couche affichée"></nav>
     <nav id="options" aria-label="Modèle et superpositions">
@@ -30,6 +33,7 @@
       <button id="opt-particules" aria-pressed="false">Particules</button>
       <button id="opt-isobares" aria-pressed="false">Isobares</button>
     </nav>
+    <span id="avis" hidden></span>
   </header>
 
   <aside id="info" aria-live="polite" hidden>

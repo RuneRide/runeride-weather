@@ -102,3 +102,22 @@ Vérifiés (Chrome sans interface) : valeur au point et légende sous `?profil=c
 - **Particules et rafales** : la superposition de particules sur une couche sans vent dépend d'un fichier `wind10` de même instant ; absent, rien n'est tracé.
 - Mesures : pas de téléphone réel, pas de 4G ; la mesure CDP ne voit pas les requêtes du Worker de MapLibre (isobares) ; pas d'images/s.
 - Mobile : l'avis de repli le plus long (Pression en HD) tient sur trois lignes ; à raccourcir.
+
+## 6. Tirage complet, fraîcheur et libellé de frise (retour utilisateur : « tu ne précises pas l'heure »)
+
+**Ce qui est affiché** (`viewer/js/format-temps.js`, module pur, 8 tests à dates fixes ; fuseau local **Europe/Paris** par défaut, `?fuseau=` pour un autre) :
+
+- **Pastille** (bureau) : « AROME HD 0,01° · tirage du sam. 17 oct. à 03 h UTC (05 h Paris) · +33 h » : modèle, jour et heure du tirage en UTC et en heure locale, échéance correspondant au temps affiché. **Forme compacte** sur mobile (≤ 420 px) : « HD · 17/10 03 h UTC · +33 h ». La pastille est un bouton : un toucher (ou un clic) ouvre le **détail** (infobulle) :
+  - « AROME HD 0,01° » / « Tirage du sam. 17 oct. à 03 h UTC (05 h Paris) · +33 h » ;
+  - « traité le 17/10 à 21 h 18 UTC (il y a 15 h) » (âge relatif calculé côté client) ;
+  - pour chaque **couche qui utilise un autre modèle ou tirage** que la pastille : « Pression : AROME 0,025°, tirage du 17/10 à 06 h UTC (08 h Paris), +30 h » (et « Particules : … » si le vent des particules vient d'un autre tirage) ;
+  - l'avis de repli en entier (« Tirage 03 h : le tirage plus récent n'a pas cette échéance. »).
+- **Avis de repli** : sous les boutons (il ne décale plus rien) ; sur mobile **une seule ligne** (ellipse), texte entier dans le détail. Quand la pression ne vient pas du même modèle ou tirage que la pastille : « Pression : AROME, tirage du 17/10 à 06 h UTC. »
+- **Frise** : « dim. 18 oct. 14 h Paris · 12 h UTC » (jour de l'heure **locale**, donc 23 h UTC le 17 s'écrit « dim. 18 oct. 01 h Paris ») ; ligne de détail : « +33 h · tirage du 17/10 à 03 h UTC ». Infobulle de la frise : l'heure UTC et son jour.
+- **Heure d'été / d'hiver** : l'heure locale vient toujours d'`Intl` (jamais calculée à la main) ; testé : 03 h UTC le 17/10 = 05 h Paris, 03 h UTC le 25/10 (après le changement) = 04 h Paris, 01 h UTC le 29/03 = 03 h Paris (02 h n'existe pas). Dans la nuit du 25/10, « 02 h » existe deux fois : le décalage est alors ajouté (« 02 h 30 Paris (UTC+2) » puis « 02 h 30 Paris (UTC+1) »).
+
+**Fraîcheur** : chaque tirage du manifest porte `traite` (UTC ISO) = date de modification du **fichier PMTiles le plus récent** du tirage. C'est la date du **dernier traitement chez nous**, **pas** la date de publication chez Météo-France (que nous ne connaissons pas). Générateur : `pipeline/manifest/build.py` (le quatrième élément du tuple de l'inventaire est le mtime) ; test `test_date_de_traitement` ; manifest régénéré (`python3 -m pipeline.manifest --tiles out/tiles-reduit2 --canon out/canon --out out/manifest/manifest.json`). Les manifests de repli (jeux synthétiques) n'ont pas de `traite` : la ligne est omise.
+
+**Défauts corrigés** : (a) `hashchange` : un hash collé dans le même onglet met à jour couche, temps, vue, modèle, particules et isobares (testé : `#couche=vent&t=2026-10-18T06:00&c=45.5,6.5&z=7&m=arome` → vent, AROME, zoom 7) ; (b) avis de repli sur une ligne sur mobile.
+
+**Captures** (`img/`, .webp) : `j3-tirage-bureau-pastille.webp` (pastille complète, frise, avis), `j3-tirage-bureau-detail-repli.webp` (détail ouvert : tirage 03 h au lieu du 06 h incomplet, pression d'AROME 06 h), `j3-tirage-mobile-compact.webp`, `j3-tirage-mobile-detail.webp` (390 px). Tests : 58 Node (`node --test viewer/tests viewer/tools`), 15 Python du manifest.
