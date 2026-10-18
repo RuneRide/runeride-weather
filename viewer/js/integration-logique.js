@@ -187,3 +187,41 @@ export function plageIsobares(manifest, { horizon = 51 } = {}) {
   const r = tirageIsobares(manifest);
   return r ? { debut: tValideDe(r.run, 0), fin: tValideDe(r.run, horizon) } : null;
 }
+
+// ------------------------------------------------------------------ production : validation, fraîcheur, préchargement sobre
+
+/**
+ * Valide le manifeste reçu (donnée non fiable). Renvoie { ok: true } ou { ok: false, code } avec
+ * code = 'invalide' (pas un objet manifeste lisible) | 'vide' (aucun tirage publié).
+ */
+export function verifierManifeste(m) {
+  if (!m || typeof m !== 'object' || Array.isArray(m) || !m.models || typeof m.models !== 'object' || Array.isArray(m.models)) return { ok: false, code: 'invalide' };
+  const runs = Object.values(m.models).flatMap(x => (x && Array.isArray(x.runs) ? x.runs : []));
+  if (!runs.length) return { ok: false, code: 'vide' };
+  if (runs.some(r => !r || typeof r.id !== 'string' || !Number.isFinite(Date.parse(r.run)))) return { ok: false, code: 'invalide' };
+  return { ok: true };
+}
+
+/**
+ * Âge (en heures, arrondi) du tirage le plus récent si l'ensemble des prévisions est trop ancien, sinon null.
+ * Seuil par défaut 30 h : avec 2 tirages par jour et 3 à 5 h de publication, au-delà il manque au moins un tirage.
+ */
+export function ageTropGrand(manifest, maintenant, seuilH = 30) {
+  const dernier = Math.max(...Object.keys(manifest?.models || {}).flatMap(m => tirages(manifest, m)).map(r => enMs(r.run)));
+  if (!Number.isFinite(dernier)) return null;
+  const h = (maintenant - dernier) / HEURE;
+  return h > seuilH ? Math.round(h) : null;
+}
+
+/**
+ * Nombre d'heures à précharger devant le temps affiché (0 à 3).
+ *  - lecture en cours : 3 (il faut avoir les tuiles avant d'arriver) ;
+ *  - à l'arrêt : 1 (l'utilisateur fait glisser la frise heure par heure, on évite le gaspillage) ;
+ *  - économie de données demandée (Save-Data), onglet masqué ou hors ligne : 0 ;
+ *  - connexion déclarée 2g ou 3g : 1 pendant la lecture, 0 à l'arrêt.
+ */
+export function horizonPrecharge({ lecture = false, economieDonnees = false, typeConnexion = '', masque = false, enLigne = true } = {}) {
+  if (!enLigne || masque || economieDonnees) return 0;
+  if (/(^|-)2g$/.test(typeConnexion) || typeConnexion === '3g') return lecture ? 1 : 0;
+  return lecture ? 3 : 1;
+}

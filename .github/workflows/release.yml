@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Construit le zip `bootstrap` arm64 (Graviton, runtime provided.al2023) de chaque fonction Lambda et publie les artefacts.
+# NE DÉPLOIE RIEN : aucun appel AWS. Le déploiement (terraform apply du module runeride-cloud, envoi du zip) est
+# fait à la main : voir docs/mise-en-production.md.
+#  - lancement manuel (workflow_dispatch) : artefacts de workflow seulement ;
+#  - tag `v*` : en plus, une release GitHub avec les zips et leurs sommes SHA-256.
+# La matrice liste les crates attendus ; un crate absent ou sans binaire `bootstrap` est ignoré avec un avertissement
+# (rw-poller et rw-manifeste peuvent évoluer ; ajouter ici un futur crate suffit).
+name: Release des fonctions Lambda
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CIBLE: aarch64-unknown-linux-musl
+
+jobs:
+  construire:
+    name: Zip arm64 de ${{ matrix.crate }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [rw-lambda, rw-poller, rw-manifeste]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Le crate existe-t-il, avec un binaire bootstrap ?
+        id: present
+        run: |
+          d="rust/crates/${{ matrix.crate }}"
+          if [ -f "$d/Cargo.toml" ] && { [ -f "$d/src/bin/bootstrap.rs" ] || grep -Eq '^name *= *"bootstrap"' "$d/Cargo.toml"; }; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Crate ${{ matrix.crate }} absent ou sans binaire bootstrap : ignoré."
+          fi
+      - name: Chaîne Rust et cible arm64
+        if: steps.present.outputs.present == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$CIBLE"
+      - uses: actions/cache@v4
+        if: steps.present.outputs.present == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-release-${{ matrix.crate }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-release-${{ matrix.crate }}-
+      - name: Construire le zip bootstrap arm64
+        if: steps.present.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          crate="${{ matrix.crate }}"
+          mkdir -p dist
+          if [ "$crate" = rw-lambda ]; then
+            # Script du dépôt (zip reproductible, mode 0755) : rust/tools/package-lambda.sh -> rust/target/lambda/rw-lambda-arm64.zip
+            rust/tools/package-lambda.sh arm64
+            cp rust/target/lambda/rw-lambda-arm64.zip dist/
+          else
+            # Même recette que le script, pour les autres fonctions (le script ne construit que rw-lambda)
+            (cd rust && RUSTFLAGS="${RUSTFLAGS:-} -C linker=rust-lld" cargo build --release --locked -p "$crate" --bin bootstrap --target "$CIBLE")
+            tmp=$(mktemp -d)
+            install -m 0755 "rust/target/$CIBLE/release/bootstrap" "$tmp/bootstrap"
+            (cd "$tmp" && touch -d @0 bootstrap && zip -q -X -9 "$GITHUB_WORKSPACE/dist/$crate-arm64.zip" bootstrap)
+          fi
+          (cd dist && sha256sum "$crate-arm64.zip" | tee "$crate-arm64.zip.sha256")
+          unzip -Z "dist/$crate-arm64.zip" | tail -n +3 | head -1
+          unzip -Z "dist/$crate-arm64.zip" | grep -q 'bootstrap'
+      - uses: actions/upload-artifact@v4
+        if: steps.present.outputs.present == 'true'
+        with:
+          name: lambda-${{ matrix.crate }}-arm64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publier:
+    name: Release GitHub (tag v*)
+    needs: construire
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lambda-*-arm64
+          path: dist
+          merge-multiple: true
+      - name: Créer la release avec les zips et les sommes SHA-256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "Fonctions Lambda arm64 (\`bootstrap\`, runtime provided.al2023). Aucun déploiement automatique : voir docs/mise-en-production.md. Vérifier avec \`sha256sum -c *.sha256\`."

@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Synchronise le viewer (dossier viewer/) vers o2switch par FTPS à chaque push sur main qui le modifie (ou à la demande).
+# Cible : racine web dédiée de weather.runeride.fr (~/weather). Même méthode que RuneRide/website.
+# Secrets du dépôt, créés par tools/ftp-setup.sh : FTP_SERVER, FTP_USERNAME, FTP_PASSWORD (jamais en dur ici).
+# Les données (tuiles, manifeste, fond de carte) ne passent PAS par ce workflow : elles sont sur weather-data.runeride.fr.
+name: Déploiement du viewer (o2switch)
+
+on:
+  push:
+    branches: [main]
+    paths: ['viewer/**', '.github/workflows/deploy.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-o2switch-weather
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Tests du viewer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Tests Node du viewer
+        run: node --test viewer/tests viewer/tools
+
+  deploy:
+    name: Synchroniser par FTPS
+    needs: tests
+    runs-on: ubuntu-latest
+    env:
+      HAS_FTP: ${{ secrets.FTP_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secrets FTP absents
+        if: env.HAS_FTP != 'true'
+        run: |
+          echo "::warning::Secrets FTP_SERVER, FTP_USERNAME et FTP_PASSWORD absents. Lancer tools/ftp-setup.sh. Rien n'a été déployé."
+      - name: Contrôle du contenu à publier
+        if: env.HAS_FTP == 'true'
+        run: |
+          test -f viewer/index.html && test -f viewer/.htaccess && test -f viewer/sw.js
+          test -f viewer/vendor/maplibre-gl/maplibre-gl.js && test -f "viewer/assets/fond/fonts/Noto Sans Regular/0-255.pbf"
+          ! grep -rEl 'cdn\.jsdelivr|unpkg\.com|protomaps\.github\.io' viewer/index.html viewer/js
+      - name: Synchroniser par FTPS
+        if: env.HAS_FTP == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          server-dir: ./
+          local-dir: ./viewer/
+          exclude: |
+            **/.git*
+            **/.git*/**
+            tests/**
+            tools/**
+            serve.py
+            isobares.html
+            particules.html
+            **/__pycache__/**
+            **/*.map
+      - name: Vérification de bout en bout (facultative)
+        if: env.HAS_FTP == 'true'
+        continue-on-error: true
+        run: |
+          # Sans effet tant que weather.runeride.fr ne répond pas (DNS, certificat) : simple avertissement
+          sleep 5
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://weather.runeride.fr/ || true)
+          echo "https://weather.runeride.fr/ -> HTTP $code"
+          if [ "$code" != "200" ]; then echo "::warning::weather.runeride.fr ne répond pas 200 (code $code) : vérifier le sous-domaine, AutoSSL et la racine ~/weather."; fi
+          curl -sI --max-time 20 https://weather.runeride.fr/ | grep -i '^content-security-policy' || echo "::warning::En-tête Content-Security-Policy absent (.htaccess non pris en compte ?)"

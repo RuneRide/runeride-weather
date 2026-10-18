@@ -95,3 +95,36 @@ export function decoderVent(r, g, b, dec) {
   const cu = (r << 4) | (g >> 4), cv = ((g & 15) << 8) | b;
   return [(cu - 1) / 4094 * 128 - 64, (cv - 1) / 4094 * 128 - 64];
 }
+
+// --- Environnement : développement local (serve.py) ou production (weather.runeride.fr) ---
+/** Hôte des données publiées (CloudFront devant S3) : manifeste, tuiles PMTiles par Range, isobares, fond de carte. */
+export const HOTE_DONNEES = 'https://weather-data.runeride.fr';
+export const HOTE_VIEWER = 'weather.runeride.fr';
+/** Fond de carte Protomaps (extrait z0-9, build du 2026-10-17). Le nom porte la date : le fichier est immuable. */
+export const FICHIER_FOND = 'domaine-z9-20261017.pmtiles';
+
+/**
+ * Détermine l'environnement. Fonction PURE (testée sans navigateur).
+ *  - production : hôte weather.runeride.fr, ou `?env=prod` (essai depuis un autre hôte) ;
+ *  - développement : tout le reste (127.0.0.1, localhost...) : tuiles sous /data*, /manifest, /isobares, /basemap (serve.py).
+ * Hors production réelle, `?donnees=https://hote` remplace l'hôte des données (essai contre une maquette locale).
+ * En production réelle, aucun paramètre ne peut rediriger les données.
+ * @param {{hostname?: string, href?: string, search?: string}|null} loc
+ */
+export function creerEnv(loc) {
+  const l = loc || {};
+  const params = new URLSearchParams(l.search || '');
+  const prodReelle = l.hostname === HOTE_VIEWER;
+  const prod = prodReelle || params.get('env') === 'prod';
+  if (!prod) {
+    const h = l.href || 'http://127.0.0.1/';
+    return { nom: 'dev', prod: false, manifeste: '/manifest/manifest.json', tuiles: null, isobares: '/isobares',
+      fond: new URL('/basemap/domaine-z9.pmtiles', h).href, donnees: null };
+  }
+  let hote = HOTE_DONNEES;
+  const sur = params.get('donnees');
+  if (!prodReelle && sur && /^https?:\/\/[^/?#]+$/.test(sur)) hote = sur;
+  return { nom: 'prod', prod: true, manifeste: `${hote}/v1/manifest.json`, tuiles: `${hote}/v1`, isobares: `${hote}/v1/isobares`,
+    fond: `${hote}/basemap/${FICHIER_FOND}`, donnees: hote };
+}
+export const ENV = creerEnv(typeof location === 'undefined' ? null : location);

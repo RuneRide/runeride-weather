@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RuneRide">
+  <rect width="512" height="512" rx="112" fill="#17191C"/>
+  <g transform="translate(106.89 70.62) scale(0.62)" fill="none" stroke-width="22" stroke-linejoin="round">
+  <defs>
+    <clipPath id="frame"><path d="M99 16H481V598H0V80H99Z"/></clipPath>
+    <clipPath id="g"><path d="M0 630.7L481 227V700H0Z"/></clipPath>
+    <clipPath id="b"><path d="M0 0H110V296L0 390.7Z"/></clipPath>
+    <clipPath id="ch"><path d="M159 0H481V598H0V230H159Z"/></clipPath>
+    <clipPath id="legcut"><path d="M-116 0H481V598H413Z"/></clipPath>
+  </defs>
+  <g id="chalk" stroke="#EBE8E0" stroke-linejoin="miter">
+    <path d="M88.00 340.00L88.00 27.00L28.00 27.00L28.00 420.00" clip-path="url(#b)"/>
+    <g clip-path="url(#ch)"><path d="M77.00 576.00L28.00 576.00L28.00 459.04A100 100 0 0 1 63.24 382.85L256.00 219.00L116.00 100.00"/></g>
+    <g clip-path="url(#g)"><path d="M178.50 441.40L297.62 576.00L375.80 576.00L223.50 403.90"/></g>
+  </g>
+  <g id="ochre" stroke="#C6934B" stroke-linejoin="miter">
+    <g clip-path="url(#frame)"><path d="M84.35 0.00L339.31 216.71A3 3 0 0 1 339.31 221.29L103.50 421.72A44 44 0 0 0 88.00 455.25L88.00 576.00L148.00 576.00L148.00 463.17A6 6 0 0 1 150.11 458.60L429.31 221.29A3 3 0 0 0 429.31 216.71L206.12 27.00L99.00 27.00"/></g>
+    <path d="M137.0 103.41L159.0 122.11V255L137.0 274Z" fill="#C6934B" stroke="none"/>
+    <g clip-path="url(#g)"><g clip-path="url(#legcut)"><path d="M250.00 343.30L455.93 576.00L380.00 576.00" stroke-linejoin="round"/></g></g>
+  </g>
+</g>
+</svg>

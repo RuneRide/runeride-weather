@@ -5,67 +5,115 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#17191C">
-  <title>Les Augures · RuneRide Météo (PoC J1)</title>
-  <!-- Versions épinglées (jsDelivr) avec empreinte SRI -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css"
-        integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+  <meta name="color-scheme" content="dark">
+  <title>Les Augures · RuneRide Météo</title>
+  <meta name="description" content="Prévisions météo AROME de Météo-France sur la France et ses abords : vent, température, pluie, nuages, avec animation heure par heure. Gratuit, sans compte.">
+  <link rel="canonical" href="https://weather.runeride.fr/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="RuneRide">
+  <meta property="og:title" content="Les Augures · RuneRide Météo">
+  <meta property="og:description" content="Prévisions météo AROME de Météo-France : vent, température, pluie, nuages, heure par heure.">
+  <meta property="og:url" content="https://weather.runeride.fr/">
+  <meta property="og:image" content="https://weather.runeride.fr/assets/icones/icon-512.png">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="assets/icones/favicon.ico" sizes="48x48">
+  <link rel="icon" href="assets/icones/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icones/icon-180.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <!-- Aucune ressource externe : MapLibre, pmtiles et @protomaps/basemaps sont copiés dans vendor/ (versions épinglées, voir vendor/LISEZMOI.md) -->
+  <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="carte" aria-label="Carte météo"></div>
+  <div id="carte" role="application" aria-label="Carte météo" data-i18n-attr="aria-label:carte"></div>
   <canvas id="surcouche" aria-hidden="true"></canvas>
 
   <header id="haut">
     <div id="ligne-titre">
       <h1>Les Augures</h1>
       <div id="etiquette">
-        <button id="pastille" aria-expanded="false" aria-controls="detail-tirage" title="Modèle et tirage affichés : toucher pour le détail"><span class="long"></span><span class="court"></span></button>
-        <div id="detail-tirage" hidden role="region" aria-label="Détail du tirage"></div>
+        <button id="pastille" aria-expanded="false" aria-controls="detail-tirage" title="Modèle et tirage affichés : toucher pour le détail" data-i18n-attr="title:pastille.titre"><span class="long"></span><span class="court"></span></button>
+        <div id="detail-tirage" hidden role="region" aria-label="Détail du tirage" data-i18n-attr="aria-label:tirage.detail"></div>
       </div>
     </div>
-    <nav id="couches" aria-label="Couche affichée"></nav>
-    <nav id="options" aria-label="Modèle et superpositions">
-      <span id="modeles" role="group" aria-label="Modèle">
-        <button data-m="auto" aria-pressed="true" title="Choix automatique selon le zoom">Auto</button>
+    <nav id="couches" aria-label="Couche affichée" data-i18n-attr="aria-label:couches"></nav>
+    <nav id="options" aria-label="Modèle et superpositions" data-i18n-attr="aria-label:modeles">
+      <span id="modeles" role="group" aria-label="Modèle" data-i18n-attr="aria-label:modele">
+        <button data-m="auto" aria-pressed="true" title="Choix automatique selon le zoom" data-i18n-attr="title:auto.titre" data-i18n="auto">Auto</button>
         <button data-m="arome" aria-pressed="false" title="AROME 0,025°">AROME</button>
         <button data-m="arome-hd" aria-pressed="false" title="AROME HD 0,01°">AROME HD</button>
       </span>
-      <button id="opt-particules" aria-pressed="false">Particules</button>
-      <button id="opt-isobares" aria-pressed="false">Isobares</button>
+      <button id="opt-particules" aria-pressed="false" data-i18n="particules">Particules</button>
+      <button id="opt-isobares" aria-pressed="false" data-i18n="isobares">Isobares</button>
     </nav>
     <span id="avis" hidden></span>
   </header>
 
   <aside id="info" aria-live="polite" hidden>
-    <button id="info-fermer" aria-label="Effacer le point">×</button>
+    <button id="info-fermer" aria-label="Effacer le point" data-i18n-attr="aria-label:info.fermer">×</button>
     <div id="info-valeur"></div>
     <div id="info-detail"></div>
   </aside>
 
-  <section id="legende" aria-label="Légende">
+  <section id="legende" aria-label="Légende" data-i18n-attr="aria-label:legende">
     <div id="leg-titre"></div>
-    <canvas id="leg-barre" width="256" height="1"></canvas>
+    <canvas id="leg-barre" width="256" height="1" role="img" aria-label="Échelle de couleurs"></canvas>
     <div id="leg-ticks"></div>
   </section>
 
+  <!-- Messages d'état : réseau coupé, tuiles en échec, prévisions anciennes (zone vivante, non bloquante) -->
+  <div id="statut" role="status" aria-live="polite" hidden></div>
+
+  <div id="chargement" role="status" data-i18n="chargement">Chargement des prévisions…</div>
+  <div id="erreur" role="alert" hidden>
+    <h2 data-i18n="err.titre">Prévisions indisponibles</h2>
+    <p id="erreur-texte"></p>
+    <button id="erreur-reessayer" data-i18n="err.reessayer">Réessayer</button>
+  </div>
+
   <footer id="bas">
     <div id="temps-ligne">
-      <button id="lecture" aria-label="Lecture" title="Lecture / pause (espace)">▶</button>
-      <button id="vitesse" aria-label="Vitesse d'animation" title="Vitesse">×1</button>
+      <button id="lecture" aria-label="Lecture" title="Lecture / pause (espace)" data-i18n-attr="aria-label:lecture;title:lecture.titre">▶</button>
+      <button id="vitesse" aria-label="Vitesse d'animation" title="Vitesse" data-i18n-attr="aria-label:vitesse;title:vitesse.titre">×1</button>
       <div id="heure" title=""><b><span id="heure-locale">--</span> <small id="heure-decalage"></small></b><span id="heure-detail"></span></div>
     </div>
-    <input id="frise" type="range" min="0" max="1" step="0.01" value="0" aria-label="Échéance">
-    <div id="attrib"><span id="attrib-modele">Source : Météo-France, Licence Ouverte v2.0</span> · <a href="https://protomaps.com" target="_blank" rel="noopener">Protomaps</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL) <span id="attrib-src"></span></div>
+    <input id="frise" type="range" min="0" max="1" step="0.01" value="0" aria-label="Échéance" data-i18n-attr="aria-label:echeance">
+    <div id="attrib"><span id="attrib-modele">Source : Météo-France, Licence Ouverte v2.0</span> · <a href="https://protomaps.com" target="_blank" rel="noopener">Protomaps</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL) <span id="attrib-src"></span> · <a href="#a-propos" data-apropos data-i18n="apropos">À propos et sources</a></div>
   </footer>
+
+  <!-- À propos et sources : sources de données, licences, code (EUPL-1.2). FR / EN selon la langue du navigateur. -->
+  <dialog id="apropos" aria-labelledby="apropos-titre">
+    <h2 id="apropos-titre" data-i18n="apropos.titre">À propos et sources</h2>
+    <div data-i18n-bloc="fr">
+      <p><strong>Les Augures</strong> est le module météo de <a href="https://runeride.fr" rel="noopener">RuneRide</a> : les prévisions numériques AROME de Météo-France, affichées heure par heure sur la France et ses abords. Gratuit, sans compte, sans traceur.</p>
+      <ul>
+        <li><strong>Prévisions</strong> : modèles AROME (0,025°) et AROME HD (0,01°) de <a href="https://meteo.data.gouv.fr" rel="noopener">Météo-France</a>, données publiques sous <a href="https://www.etalab.gouv.fr/licence-ouverte-open-licence/" rel="noopener">Licence Ouverte v2.0</a>. Données retraitées (tuilage, quantification, interpolation) par RuneRide ; ce n'est pas un produit officiel de Météo-France, et il ne remplace pas la vigilance météorologique officielle.</li>
+        <li><strong>Fond de carte</strong> : © contributeurs <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a> (licence ODbL), tuiles <a href="https://protomaps.com" rel="noopener">Protomaps</a>. Polices Noto Sans (SIL OFL 1.1), icônes du fond (licence MIT, Mapzen).</li>
+        <li><strong>Affichage</strong> : <a href="https://maplibre.org" rel="noopener">MapLibre GL JS</a>, PMTiles, @protomaps/basemaps (licences BSD-3-Clause).</li>
+        <li><strong>Code</strong> : licence <a href="https://eupl.eu/1.2/fr" rel="noopener">EUPL-1.2</a>, dépôt <a href="https://github.com/RuneRide/runeride-weather" rel="noopener">github.com/RuneRide/runeride-weather</a>. Logo et icônes : CC BY-SA 4.0.</li>
+        <li><strong>Prévision indicative</strong> : en cas de doute ou pour votre sécurité, consultez <a href="https://vigilance.meteofrance.fr" rel="noopener">vigilance.meteofrance.fr</a>.</li>
+      </ul>
+    </div>
+    <div data-i18n-bloc="en" hidden>
+      <p><strong>Les Augures</strong> is the weather module of <a href="https://runeride.fr/en/" rel="noopener">RuneRide</a>: Météo-France AROME numerical forecasts, shown hour by hour over France and its surroundings. Free, no account, no trackers.</p>
+      <ul>
+        <li><strong>Forecasts</strong>: AROME (0.025°) and AROME HD (0.01°) models from <a href="https://meteo.data.gouv.fr" rel="noopener">Météo-France</a>, public data under the <a href="https://www.etalab.gouv.fr/licence-ouverte-open-licence/" rel="noopener">Licence Ouverte v2.0</a> (Open Licence). Data reprocessed (tiling, quantisation, interpolation) by RuneRide; this is not an official Météo-France product and does not replace official weather warnings.</li>
+        <li><strong>Base map</strong>: © <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a> contributors (ODbL), tiles by <a href="https://protomaps.com" rel="noopener">Protomaps</a>. Noto Sans fonts (SIL OFL 1.1), map icons (MIT licence, Mapzen).</li>
+        <li><strong>Display</strong>: <a href="https://maplibre.org" rel="noopener">MapLibre GL JS</a>, PMTiles, @protomaps/basemaps (BSD-3-Clause).</li>
+        <li><strong>Code</strong>: <a href="https://eupl.eu/1.2/en" rel="noopener">EUPL-1.2</a> licence, repository <a href="https://github.com/RuneRide/runeride-weather" rel="noopener">github.com/RuneRide/runeride-weather</a>. Logo and icons: CC BY-SA 4.0.</li>
+        <li><strong>Indicative forecast</strong>: if in doubt or for your safety, check <a href="https://vigilance.meteofrance.fr" rel="noopener">vigilance.meteofrance.fr</a>.</li>
+      </ul>
+    </div>
+    <button id="apropos-fermer" data-i18n="apropos.fermer">Fermer</button>
+  </dialog>
 
   <pre id="mesures" hidden></pre>
 
-  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"
-          integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"
-          integrity="sha384-pbKNZbDshUsLnZMIVsn/t+j3xEY9PGfuX5Z22l5rcy/obXz3EwaMx1F5d9sRsJMn" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@protomaps/basemaps@5.7.2/dist/basemaps.js"
-          integrity="sha384-fzuU7k7ZWwfZAe1+3h7plrSA6dNazJaM2NsKVwcrReJLK0gwVwyOSyPwROl9m1M0" crossorigin="anonymous"></script>
+  <noscript><p class="noscript">Les Augures demande JavaScript et WebGL pour afficher la carte. / This map needs JavaScript and WebGL.</p></noscript>
+
+  <script src="vendor/maplibre-gl/maplibre-gl.js"></script>
+  <script src="vendor/pmtiles/pmtiles.js"></script>
+  <script src="vendor/protomaps-basemaps/basemaps.js"></script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

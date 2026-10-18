@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Intégration continue : tests Python (pipeline), tests Node (viewer), tests Rust (crates sans dépendance C), lint des workflows.
+# Ne déploie rien et n'appelle ni AWS ni cPanel. Les tests qui lisent de gros fichiers absents du dépôt
+# (tests/validation, jeux de données réels) ne sont pas lancés ici.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  python:
+    name: Tests Python (pipeline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Dépendances
+        run: python -m pip install numpy pillow pmtiles eccodes
+      - name: Tests du pipeline
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m unittest discover -s tests/tiling -t .
+          python -m unittest discover -s tests/isobars -t .
+          python -m unittest discover -s tests/manifest -t .
+          python -m unittest discover -s tests/basemap -t .
+          python -m unittest discover -s tests/ingest
+      - name: Serveur de test du viewer (syntaxe)
+        run: python -m py_compile viewer/serve.py
+
+  viewer:
+    name: Tests Node (viewer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test viewer/tests viewer/tools
+
+  rust:
+    name: Tests Rust
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Chaîne Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+        working-directory: .
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-test-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: rust-test-${{ runner.os }}-
+      # Crates dont la compilation n'a aucune dépendance C (rustls RustCrypto, WebP en Rust pur)
+      - name: Tests (crates sans C)
+        run: cargo test --release --locked -p rw-grib -p rw-aws -p rw-isobares -p rw-poller -p rw-manifeste -p rw-lambda
+      # rw-cli et rw-tiles : libwebp (C) est une option par défaut ; on teste la variante Rust pur (webp-pure), celle des Lambda
+      - name: Tests (rw-cli, rw-tiles en WebP pur)
+        run: cargo test --release --locked -p rw-cli -p rw-tiles --no-default-features --features webp-pure
+
+  workflows:
+    name: Lint des workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntaxe YAML
+        run: python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/*.yml
+      - name: actionlint (version et empreinte épinglées)
+        run: |
+          v=1.7.12
+          f="actionlint_${v}_linux_amd64.tar.gz"
+          curl -fsSL -o "$f" "https://github.com/rhysd/actionlint/releases/download/v${v}/${f}"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  ${f}" | sha256sum -c -
+          tar xzf "$f" actionlint
+          ./actionlint -color

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 // Page de visualisation RuneRide Météo : carte MapLibre + calque WebGL de données + particules de vent + isobares,
 // pilotée par le manifest (choix automatique du modèle et du tirage, frise en temps valide UTC). Voir docs/poc-j3/integration.md.
-import { COUCHES, TUILE, couleurPalette, paramsDecodage } from './config.js';
+import { COUCHES, ENV, TUILE, couleurPalette, paramsDecodage } from './config.js';
+import { creerT, detecterLangue } from './i18n.js';
 import { CoucheDonnees, tuilesVisibles } from './couche-gl.js';
-import { SourceCompteuse, archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surTuile } from './donnees.js';
+import { SourceCompteuse, archive, demanderTuile, entreeCache, lireAuPoint, mercator, stats, surReseau, surTuile } from './donnees.js';
 import { Surcouche } from './fleches.js';
 import { AROME, AROME_HD, attribution, choisirTirage, cheminFichier, libelleModele, plageTemps, resoudre, tirages } from './modele-auto.js';
 import * as IL from './integration-logique.js';
@@ -19,11 +20,20 @@ const mesures = { nom: params.get('nom') || 'mesures', date: new Date().toISOStr
 const jalon = (nom) => { mesures.jalons[nom] = Math.round((performance.now()) * 10) / 10; };
 const H = 3600e3;
 const FUSEAU = params.get('fuseau') || FT.FUSEAU;   // fuseau de l'heure locale (Europe/Paris par défaut)
+// Langue de l'interface (navigateur, ou ?lang=fr|en) : habillage seulement, voir i18n.js
+const LANGUE = detecterLangue(navigator.languages || [navigator.language], params.get('lang'));
+const tr = creerT(LANGUE);
+document.documentElement.lang = LANGUE;
+if (ENV.prod && ENV.donnees) {   // poignée de main TLS avec l'hôte des données dès le chargement de la page (gain d'un aller-retour)
+  const l = document.createElement('link'); l.rel = 'preconnect'; l.href = ENV.donnees; l.crossOrigin = 'anonymous'; document.head.appendChild(l);
+}
 
 // ---------------------------------------------------------------- état
 const MONTAGES = { reduit2: '/data-reduit2', data: '/data', reduit: '/data-reduit', synth: '/data-synth', sans: '/data-sans', brute: '/data-brute' };
 const ZOOMS_MODELE = { 'arome-hd': [5, 8], arome: [3, 7] };
-const PRESSION = { cle: 'pression', nom: 'Pression', variable: null, pseudo: true };   // pas de raster : isobares seules
+const PRESSION = { cle: 'pression', nom: 'Pression', variable: null, pseudo: true };
+const nomCouche = c => tr('couche.' + c.cle);
+const uniteCouche = c => (c.cle === 'neige' ? tr('unite.neige') : c.aff.unite);   // pas de raster : isobares seules
 const etat = {
   base: '', manifest: null, mode: IL.normaliserMode(params.get('modele')),
   couche: COUCHES[0], tValide: 0, lecture: false, vitesse: 1, point: null, zoomsVar: new Map(),
@@ -33,11 +43,35 @@ const etat = {
 const nomModele = m => (m === AROME_HD ? 'AROME HD' : 'AROME');
 
 // ---------------------------------------------------------------- manifest
+/** Erreur de chargement destinée à l'utilisateur : `code` = clé de i18n (err.<code>). */
+class ErreurAffichable extends Error { constructor(code, cause) { super(code); this.code = code; this.cause = cause; } }
+/** GET JSON avec délai maximal (donnée non fiable : rien n'est exécuté, la forme est vérifiée ensuite). */
+async function lireJson(url, { delai = 10000 } = {}) {
+  const ctl = new AbortController(), minuteur = setTimeout(() => ctl.abort(), delai);
+  try {
+    const rep = await fetch(url, { signal: ctl.signal, credentials: 'omit' });
+    if (!rep.ok) throw new Error(`HTTP ${rep.status} sur ${url}`);
+    return await rep.json();
+  } finally { clearTimeout(minuteur); }
+}
+async function chargerManifestProd() {
+  let manifest = null, derniere = null;
+  for (let essai = 0; essai < 3 && !manifest; essai++) {
+    try { manifest = await lireJson(ENV.manifeste); }
+    catch (e) { derniere = e; console.warn('manifeste', e); if (!navigator.onLine) break; await attendre(600 * 2 ** essai); }
+  }
+  if (!manifest) throw new ErreurAffichable(navigator.onLine === false ? 'horsligne' : 'manifeste', derniere);
+  const v = IL.verifierManifeste(manifest);
+  if (!v.ok) throw new ErreurAffichable(v.code);
+  etat.base = ENV.tuiles; etat.srcNom = 'prod'; etat.manifest = manifest;
+  etat.refT = Math.min(...Object.keys(manifest.models).flatMap(m => tirages(manifest, m)).map(r => Date.parse(r.run)));
+}
 async function chargerManifest() {
+  if (ENV.prod) return chargerManifestProd();
   const demande = { reduit2: 'reduit2', reduit: 'reduit', contrat: 'data' }[params.get('profil')] || params.get('src') || 'auto';
   const essais = demande === 'auto' ? ['reduit2', 'data', 'synth'] : [demande];
   let manifest = null;
-  try { manifest = await (await fetch('/manifest/manifest.json')).json(); } catch (e) { console.warn('manifest', e); }
+  try { manifest = await (await fetch(ENV.manifeste)).json(); } catch (e) { console.warn('manifest', e); }
   for (const nom of essais) {
     try {
       const idx = await (await fetch(MONTAGES[nom] + '/index.json')).json();
@@ -64,7 +98,10 @@ function plage() {
 const OPACITE = Number(params.get('opacite') || 0.85);
 const AVEC_FOND = params.get('fond') !== '0';
 const THEME = ['clair', 'light'].includes(params.get('theme')) ? 'light' : 'dark';
-const URL_FOND = new URL('/basemap/domaine-z9.pmtiles', location.href).href;
+const URL_FOND = ENV.fond;
+// Polices et sprites du fond : auto-hébergés (assets/fond/), aucune dépendance externe à l'exécution.
+// Les accolades {fontstack} et {range} ne doivent pas passer par new URL (elles seraient encodées).
+const RACINE_FOND = new URL('assets/fond/', location.href).href;
 // couches du fond placées AU-DESSUS de la météo : routes, frontières, libellés, points d'intérêt
 // (terre, occupation du sol, eau et rivières restent EN DESSOUS : la météo se lit aussi sur la mer ; pistes d'aéroport sous la météo)
 const RE_HAUT = /^(roads_(?!runway|taxiway)|boundaries|places_|pois|water_label|water_waterway|earth_label|address|buildings)/;
@@ -76,8 +113,8 @@ function construireStyle() {
   protocole.add(new pmtiles.PMTiles(new SourceCompteuse(URL_FOND, 'fond')));
   return {
     version: 8, name: 'RuneRide ' + THEME,
-    glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
-    sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/' + THEME,
+    glyphs: RACINE_FOND + 'fonts/{fontstack}/{range}.pbf',
+    sprite: RACINE_FOND + 'sprites/v4/' + THEME,
     sources: { protomaps: { type: 'vector', url: 'pmtiles://' + URL_FOND, attribution: '' } },
     layers: basemaps.layers('protomaps', basemaps.namedFlavor(THEME), { lang: 'fr' }),
   };
@@ -97,6 +134,8 @@ function creerCarte() {
     canvasContextAttributes: { antialias: false },
   });
   map.touchZoomRotate.disableRotation();
+  // erreurs de chargement de la carte (tuiles du fond, polices, isobares) : message discret, jamais bloquant
+  map.on('error', ev => { console.warn('carte', ev && ev.error); if (!enCours) statut(tr('statut.fond'), { delai: 6000 }); });
   couchegl = new CoucheDonnees();
   surcouche = new Surcouche($('surcouche'), map);
   return new Promise(res => map.on('load', res));
@@ -166,11 +205,13 @@ const flechesVisibles = () => !etat.sansFleches && !(etat.particules && particul
 const etatSurcouche = () => ({ couche: etat.couche, urlA: etat.cur?.urlA, urlB: etat.cur?.urlB, mix: etat.cur?.mix || 0,
   zoneZ: zoneZ(), zmin: etat.cur?.zmin || 3, point: etat.point, fleches: flechesVisibles() });
 
-/** Précharge les tuiles visibles des 3 heures suivantes (spec §6.5), dans le modèle affiché. */
+/** Précharge les tuiles visibles des heures suivantes (jusqu'à 3 en lecture, 1 à l'arrêt : IL.horizonPrecharge), dans le modèle affiché. */
 function precharger(c, res) {
   const [zmin, zmax] = zoomsDe(res.modele, c.variable);
   const tv = tuilesVisibles(map, zmin, zmax);
-  for (let k = 1; k <= 3; k++) {
+  const n = IL.horizonPrecharge({ lecture: etat.lecture, economieDonnees: !!navigator.connection?.saveData,
+    typeConnexion: navigator.connection?.effectiveType || '', masque: document.hidden, enLigne: navigator.onLine !== false });
+  for (let k = 1; k <= n; k++) {
     const t = choisirTirage({ modele: res.modele, variable: c.variable, tValide: etat.tValide + k * H, manifest: etat.manifest });
     if (!t) continue;
     const u = fichier(t, t.step);
@@ -268,16 +309,16 @@ function majInfo() {
   let va = a && a.valeur;
   if (va && b && b.valeur) va = va.map((x, i) => x + (b.valeur[i] - x) * cur.mix);
   else if (!va && b && b.valeur) va = b.valeur;
-  if (!a) { $('info-valeur').textContent = '…'; $('info-detail').textContent = pos + ' · chargement'; return; }
-  if (!va) { $('info-valeur').textContent = '—'; $('info-detail').textContent = pos + ' · pas de donnée'; return; }
+  if (!a) { $('info-valeur').textContent = '…'; $('info-detail').textContent = pos + ' · ' + tr('info.chargement'); return; }
+  if (!va) { $('info-valeur').textContent = '—'; $('info-detail').textContent = pos + ' · ' + tr('info.vide'); return; }
   if (c.dec.enc !== 'scalar8') {
     const [u, v] = va, vit = Math.hypot(u, v), dir = (270 - Math.atan2(v, u) * 180 / Math.PI + 360) % 360;
     $('info-valeur').textContent = `${(vit * 3.6).toFixed(0)} km/h`;
     $('info-detail').textContent = `${vit.toFixed(1)} m/s · ${(vit * 1.944).toFixed(0)} nd · de ${DIRS[Math.round(dir / 45) % 8]} ${dir.toFixed(0)}°  ${pos}`;
   } else {
     const d = va[0] * c.aff.mul + c.aff.add;
-    $('info-valeur').textContent = `${d.toFixed(c.aff.dec).replace('.', ',')} ${c.aff.unite}`;
-    $('info-detail').textContent = `${c.nom} · ${pos}`;
+    $('info-valeur').textContent = `${d.toFixed(c.aff.dec).replace('.', ',')} ${uniteCouche(c)}`;
+    $('info-detail').textContent = `${nomCouche(c)} · ${pos}`;
   }
 }
 
@@ -286,13 +327,13 @@ function majLegende() {
   const c = etat.couche;
   const cv = $('leg-barre'), ticks = $('leg-ticks');
   if (c.pseudo) {
-    $('leg-titre').textContent = 'Pression au niveau de la mer (hPa)';
-    cv.hidden = true; ticks.textContent = 'Isobares tous les 2 hPa · A anticyclone · D dépression'; ticks.classList.add('texte');
+    $('leg-titre').textContent = tr('pression.titre');
+    cv.hidden = true; ticks.textContent = tr('pression.legende'); ticks.classList.add('texte');
     return;
   }
   cv.hidden = false; ticks.classList.remove('texte');
   const leg = c.legende;
-  $('leg-titre').textContent = `${c.nom} (${c.aff.unite})`;
+  $('leg-titre').textContent = `${nomCouche(c)} (${uniteCouche(c)})`;
   const ctx = cv.getContext('2d');
   const img = ctx.createImageData(256, 1);
   for (let i = 0; i < 256; i++) {
@@ -347,7 +388,7 @@ async function majIsobares() {
   try {
     if (echeanceCourante(map) === null) {
       isoEnCours = true;
-      await ajouterIsobares(map, { src: `/isobares/${e.src}`, avant: etat.idHaut, echeance: e.echeance, valeurs: AVEC_FOND, extrema: true });
+      await ajouterIsobares(map, { src: `${ENV.isobares}/${e.src}`, avant: etat.idHaut, echeance: e.echeance, valeurs: AVEC_FOND, extrema: true });
       etat.isoSrc = e.src;
     } else if (e.echeance !== echeanceCourante(map)) {
       isoEnCours = true;
@@ -361,7 +402,7 @@ function majBoutons() {
   if (!p) return;
   p.setAttribute('aria-pressed', String(!!etat.particules));
   const reduit = particules && particules.etat.mouvementReduit;
-  p.title = reduit ? 'Mouvement réduit demandé : flèches à la place des particules' : 'Particules de vent animées';
+  p.title = reduit ? tr('particules.reduit') : tr('particules.titre');
   p.dataset.reduit = reduit ? '1' : '';
   i.setAttribute('aria-pressed', String(!!(etat.isobares || etat.couche.pseudo)));
 }
@@ -372,7 +413,7 @@ function construireCouches() {
   nav.textContent = '';
   for (const c of [...COUCHES, PRESSION]) {
     const b = document.createElement('button');
-    b.textContent = c.nom; b.dataset.cle = c.cle;
+    b.textContent = nomCouche(c); b.dataset.cle = c.cle;
     b.disabled = c.pseudo ? !IL.tirageIsobares(etat.manifest) : !plageTemps(etat.manifest, c.cle);
     b.setAttribute('aria-pressed', String(c === etat.couche));
     b.addEventListener('click', () => choisirCouche(c));
@@ -418,7 +459,7 @@ async function lireEntetes(c) {
 function lecture(on) {
   etat.lecture = on;
   $('lecture').textContent = on ? '❚❚' : '▶';
-  $('lecture').setAttribute('aria-label', on ? 'Pause' : 'Lecture');
+  $('lecture').setAttribute('aria-label', on ? tr('pause') : tr('lecture'));
   if (!on) ecrireHash();
   if (on) { dernierT = performance.now(); requestAnimationFrame(boucle); }
 }
@@ -747,7 +788,8 @@ async function demarrer() {
   etat.tValide = h.tValide ?? (params.has('t') ? etat.refT + Number(params.get('t')) * H : Math.floor(Date.now() / H) * H)   // par défaut : l'heure courante, bornée à la frise;
   etat.tValide = Math.min(pl.fin, Math.max(pl.debut, etat.tValide));
   construireCouches();
-  $('attrib-src').textContent = `· tuiles : ${etat.srcNom === 'data' ? 'profil contrat' : etat.srcNom === 'reduit' ? 'profil reduit' : etat.srcNom === 'reduit2' ? 'profil reduit2' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
+  if (ENV.prod) { const age = IL.ageTropGrand(etat.manifest, Date.now()); if (age) statut(tr('statut.ancien', { h: age })); }
+  if (!ENV.prod) $('attrib-src').textContent = `· tuiles : ${etat.srcNom === 'data' ? 'profil contrat' : etat.srcNom === 'reduit' ? 'profil reduit' : etat.srcNom === 'reduit2' ? 'profil reduit2' : 'SYNTHÉTIQUES (' + etat.srcNom + ')'}`;
   await creerCarte();
   jalon('carte_prete');
   surcouche.redimensionner();
@@ -773,7 +815,68 @@ async function demarrer() {
   });
   if (BENCH) banc();
 }
-demarrer().catch(e => {
-  console.error(e);
-  const pre = $('mesures'); pre.hidden = false; pre.textContent = 'ERREUR : ' + e.message; pre.dataset.erreur = '1';
+// ---------------------------------------------------------------- erreurs et état du réseau côté utilisateur
+function afficherErreur(code) {
+  const zone = $('erreur'); if (!zone) return;
+  $('erreur-texte').textContent = tr('err.' + code);
+  zone.hidden = false;
+  $('chargement').hidden = true;
+}
+function statut(texte, { delai = 0 } = {}) {
+  const z = $('statut'); if (!z) return;
+  z.textContent = texte; z.hidden = !texte;
+  clearTimeout(statut.minuteur);
+  if (texte && delai) statut.minuteur = setTimeout(() => statut(''), delai);
+}
+let derniersEchecs = 0;
+surReseau(ok => {
+  if (!ok) { derniersEchecs++; if (derniersEchecs >= 2) statut(navigator.onLine === false ? tr('statut.horsligne') : tr('statut.tuiles')); }
+  else if (derniersEchecs) { derniersEchecs = 0; statut(''); }
 });
+window.addEventListener('offline', () => statut(tr('statut.horsligne')));
+window.addEventListener('online', () => { statut(tr('statut.retour'), { delai: 3000 }); if (!etat.manifest) lancer(); });
+
+function appliquerLangue() {
+  document.title = tr('titre');
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = tr(el.dataset.i18n);
+  for (const el of document.querySelectorAll('[data-i18n-attr]')) {
+    for (const paire of el.dataset.i18nAttr.split(';')) { const [attr, cle] = paire.split(':'); el.setAttribute(attr.trim(), tr(cle.trim())); }
+  }
+  const d = document.querySelector('meta[name="description"]'); if (d) d.content = tr('description');
+  for (const b of document.querySelectorAll('[data-i18n-bloc]')) b.hidden = b.dataset.i18nBloc !== LANGUE;
+}
+appliquerLangue();
+
+// ---------------------------------------------------------------- « À propos et sources »
+function brancherApropos() {
+  const dlg = $('apropos'); if (!dlg) return;
+  const ouvrir = () => { if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', ''); };
+  document.querySelectorAll('[data-apropos]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); ouvrir(); }));
+  $('apropos-fermer').addEventListener('click', () => (dlg.close ? dlg.close() : dlg.removeAttribute('open')));
+  if (location.hash === '#a-propos') ouvrir();
+}
+brancherApropos();
+
+// ---------------------------------------------------------------- service worker (coquille de l'application, facultatif)
+if ('serviceWorker' in navigator && ENV.prod && !BENCH) {
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('sw', e)));
+}
+
+let enCours = false;
+async function lancer() {
+  if (enCours) return;
+  enCours = true;
+  $('erreur').hidden = true; $('chargement').hidden = false;
+  try {
+    await demarrer();
+    $('chargement').hidden = true;
+  } catch (e) {
+    console.error(e);
+    if (e instanceof ErreurAffichable) return afficherErreur(e.code);
+    if (ENV.prod) return afficherErreur(/webgl/i.test(String(e && e.message)) ? 'webgl' : 'inattendue');
+    const pre = $('mesures'); pre.hidden = false; pre.textContent = 'ERREUR : ' + e.message; pre.dataset.erreur = '1';
+    $('chargement').hidden = true;
+  } finally { enCours = false; }
+}
+$('erreur-reessayer').addEventListener('click', () => { etat.manifest = null; lancer(); });
+lancer();

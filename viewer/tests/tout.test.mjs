@@ -3,3 +3,4 @@
 import './modele-auto.test.mjs';
 import './integration.test.mjs';
 import './format-temps.test.mjs';
+import './production.test.mjs';

@@ -12,6 +12,7 @@ export const stats = {
   requetesTuiles: 0, tuilesChargees: 0, tuilesAbsentes: 0, ms: [],
   phase: 'ouverture', parPhase: {},
 };
+stats.erreurs = 0;                          // tuiles de données en échec (réseau, serveur, décodage)
 stats.fond = { requetes: 0, octets: 0 };   // fond de carte vectoriel (PMTiles Protomaps), compté à part
 function compter(octets, cat) {
   if (cat === 'fond') { stats.fond.requetes++; stats.fond.octets += octets; return; }
@@ -20,13 +21,20 @@ function compter(octets, cat) {
   p.requetes++; p.octets += octets;
 }
 
+const DELAI_MS = 20000;
+/** Un échec de tuile est retenté après 5 s, puis 10 s, 20 s... (plafond 60 s) tant que la tuile reste demandée. */
+export const delaiReessai = essais => Math.min(60000, 5000 * 2 ** Math.max(0, essais - 1));
+
 /** Source PMTiles qui compte les octets reçus par requête Range. */
 export class SourceCompteuse {
   constructor(url, cat = 'donnees') { this.url = url; this.cat = cat; }
   getKey() { return this.url; }
   async getBytes(offset, length, signal) {
     if (LATENCE && this.cat === 'donnees') await new Promise(r => setTimeout(r, LATENCE));   // ?latence=ms : réseau lent simulé (tests de bascule)
-    const rep = await fetch(this.url, { signal, headers: { Range: `bytes=${offset}-${offset + length - 1}` } });
+    // délai maximal par requête (réseau mort ou serveur muet) : sans lui une tuile resterait « en chargement » indéfiniment
+    const limite = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(DELAI_MS) : null;
+    const sig = limite && signal && AbortSignal.any ? AbortSignal.any([signal, limite]) : (signal || limite || undefined);
+    const rep = await fetch(this.url, { signal: sig, headers: { Range: `bytes=${offset}-${offset + length - 1}` } });
     if (rep.status !== 206 && rep.status !== 200) throw new Error(`HTTP ${rep.status} sur ${this.url}`);
     const data = await rep.arrayBuffer();
     // 200 = le serveur a ignoré Range : on découpe (le coût réel est alors le fichier entier)
@@ -84,8 +92,10 @@ function lirePixels(bitmap, canaux) {
 export function demanderTuile(urlFichier, z, x, y, couche) {
   const cle = `${urlFichier}|${z}/${x}/${y}`;
   let e = cache.get(cle);
+  let essais = 0;
+  if (e && e.etat === 'erreur' && performance.now() - e.tErreur >= delaiReessai(e.essais)) { essais = e.essais; cache.delete(cle); liberer(e); e = null; }   // nouvel essai espacé
   if (e) { toucher(cle, e); return e; }
-  e = { etat: 'charge', cle, canaux: couche.dec.enc === 'scalar8' ? 1 : 3, vu: 0 };
+  e = { etat: 'charge', cle, canaux: couche.dec.enc === 'scalar8' ? 1 : 3, vu: 0, essais };
   cache.set(cle, e);
   stats.requetesTuiles++;
   const t0 = performance.now();
@@ -98,9 +108,11 @@ export function demanderTuile(urlFichier, z, x, y, couche) {
       Object.assign(e, lirePixels(bmp, e.canaux));
       bmp.close();
       e.etat = 'pret'; stats.tuilesChargees++; stats.ms.push(performance.now() - t0);
+      surEtatReseau(true);
     } catch (err) {
-      e.etat = 'erreur'; e.erreur = String(err);
+      e.etat = 'erreur'; e.erreur = String(err); e.essais++; e.tErreur = performance.now(); stats.erreurs++;
       console.warn('tuile', cle, err);
+      surEtatReseau(false);
     }
     surChangement();
   })();
@@ -109,6 +121,9 @@ export function demanderTuile(urlFichier, z, x, y, couche) {
 }
 
 let surChangement = () => {};
+let surEtatReseau = () => {};
+/** Rappel appelé avec true (tuile reçue) ou false (échec) : l'interface en tire un message discret. */
+export function surReseau(f) { surEtatReseau = f; }
 export function surTuile(f) { surChangement = f; }
 
 // --- Lecture CPU au point (miroir du shader) ---

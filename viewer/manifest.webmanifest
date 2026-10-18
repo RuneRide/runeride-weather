@@ -1,0 +1,23 @@
+{
+  "name": "Les Augures · RuneRide Météo",
+  "short_name": "Augures",
+  "description": "Prévisions météo AROME de Météo-France : vent, température, pluie, nuages, heure par heure.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#17191C",
+  "theme_color": "#17191C",
+  "icons": [
+    {
+      "src": "assets/icones/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/icones/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
