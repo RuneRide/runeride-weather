@@ -66,25 +66,26 @@ Sous-domaine `weather.runeride.fr`, racine dédiée `~/weather`, compte FTP `dep
 
 ## 4. Infrastructure AWS : module `runeride-cloud/terraform/meteo`
 
-Le module est en cours de rédaction par ailleurs et **n'a jamais été planifié ni appliqué**. Suivre son `README.md` (« Ordre d'application recommandé ») : `terraform init`, `terraform plan` (à lire), puis chaque `apply` avec accord explicite. Points qui concernent ce runbook :
+Le module n'a **jamais été planifié ni appliqué**. Suivre son `README.md` (« Ordre d'application recommandé ») : `terraform init`, `terraform plan` (à lire), puis chaque `apply` avec accord explicite. **Faire le §5 (zips) avant le second `apply`** : le plan lit le zip du worker. Points qui concernent ce runbook :
 
+- [ ] **[TOI]** Depuis `runeride-cloud/terraform/meteo` : `cp terraform.tfvars.example terraform.tfvars` ; renseigner `compte` (12 chiffres) et `alerte_email` (sans elle : ni budget ni notification d'alarme) ; `terraform init -backend-config="bucket=<compartiment d'état>" -backend-config="key=meteo/production.tfstate"` (le compartiment d'état doit déjà exister) ; `terraform plan` et lire.
+- [ ] **[TOI]** Quota Lambda du compte : `aws lambda get-account-settings --profile bike360 --region eu-north-1 --query 'AccountLimit.[ConcurrentExecutions,UnreservedConcurrentExecutions]'`. Avec 10 : toute concurrence réservée est refusée (le manifeste, `manifeste_concurrence_reservee = 1`, ne pourra pas être activé tel quel) et `worker_concurrence_max = 10` laisse le poller et le manifeste sans exécution pendant un tirage. Demander le relèvement du quota (support AWS) ou baisser `worker_concurrence_max`, **avant** le §7 voie B.
 - [ ] **[TOI]** `terraform apply -target=aws_acm_certificate.donnees` (certificat ACM en `us-east-1`).
 - [ ] **[TOI]** Créer chez o2switch (cPanel, « Éditeur de zone DNS ») le **CNAME de validation ACM** donné par la sortie `terraform output dns` ; attendre l'émission du certificat.
 - [ ] **[TOI]** Passer `certificat_valide = true`, `terraform apply` (le zip du worker, §5, doit exister).
 - [ ] **[TOI]** Créer le **CNAME `weather-data`** vers le nom CloudFront (dernier élément de `terraform output dns`, ou `terraform output cloudfront`). Vérifier : `dig +short CNAME weather-data.runeride.fr`.
-- [ ] **[TOI]** Confirmer les e-mails d'abonnement SNS (alarmes).
-- [ ] **[TOI]** Vérifier dans `variables.tf` que `origines_autorisees` contient `https://weather.runeride.fr` (la politique CORS ne doit autoriser que lui et le viewer local `http://localhost:8187`).
+- [ ] **[TOI]** Confirmer les **deux** e-mails d'abonnement SNS (un sujet en `eu-north-1`, un en `us-east-1` pour l'alarme CloudFront). Alarmes : le quota gratuit (10) est celui du compte entier ; `../deploiement` en prend jusqu'à 4, ce module 7 à 9 : 1 à 3 alarmes seront payantes (≈ 0,10 $/mois pièce).
+- [ ] **[TOI]** Vérifier dans `variables.tf` que `origines_autorisees` contient `https://weather.runeride.fr` (la politique CORS ne doit autoriser que lui et le viewer local, `http://localhost:8187` et `http://127.0.0.1:8187`).
 - [ ] **[TOI]** Relever le nom du bucket : `BUCKET=$(terraform -chdir=../runeride-cloud/terraform/meteo output -raw bucket)`.
-- [ ] **[TOI]** Contrôler que la politique du bucket et le comportement CloudFront par défaut couvrent aussi `basemap/*` (en dehors de `v1/`) : si le module restreint la lecture au seul préfixe `v1/`, l'étendre avant le §6.
+- [ ] **[TOI]** Contrôler dans le plan que la politique du bucket autorise `GetObject` sur `v1/*` **et** `basemap/*` (variable `prefixe_fond`) ; le comportement CloudFront par défaut couvre `basemap/*`. Sans cela, le fond de carte répond 403 (vérifié au §6).
 
 ## 5. Fonctions Lambda : zips arm64
 
-Le workflow `release.yml` construit le zip `bootstrap` arm64 de `rw-lambda`, `rw-poller` et `rw-manifeste` (un crate absent est ignoré avec un avertissement) et **ne déploie rien**.
+**Limite du workflow.** `release.yml` ne construit correctement que le zip du worker `rw-lambda` : pour `rw-poller` et `rw-manifeste` il cherche un binaire nommé `bootstrap` (leurs binaires s'appellent `rw-poller` et `rw-manifeste`), donc il les **ignore avec un avertissement**. Il ne déploie rien. Pour les trois zips, utiliser le script du dépôt.
 
-- [ ] **[TOI]** Pousser un tag : `git tag v0.1.0 && git push origin v0.1.0` (ou lancer à la main : `gh workflow run release.yml --repo RuneRide/runeride-weather`). Les zips et leurs `.sha256` sont en pièces jointes de la release (ou artefacts du workflow).
-- [ ] **[TOI]** Télécharger : `gh release download v0.1.0 --repo RuneRide/runeride-weather --dir dist && (cd dist && sha256sum -c *.sha256)`.
-- [ ] **[TOI]** Renseigner `chemin_zip_worker` (et, plus tard, ceux du poller et du manifeste) dans `terraform.tfvars`.
-- Sans passer par GitHub : `rust/tools/package-lambda.sh arm64` produit `rust/target/lambda/rw-lambda-arm64.zip` (prérequis : `rustup target add aarch64-unknown-linux-musl`).
+- [ ] **[TOI]** Construire les trois zips : `rustup target add aarch64-unknown-linux-musl` (une fois), puis `rust/tools/package-lambda.sh arm64 tout` → `rust/target/lambda/{rw-lambda,rw-poller,rw-manifeste}-arm64.zip` (le script compile avec `--locked` : un `Cargo.lock` non à jour fait échouer la construction, voir §11.4).
+- [ ] **[TOI]** Renseigner dans `terraform.tfvars` `chemin_zip_worker` (et, pour le §7 voie B, `chemin_zip_poller` et `chemin_zip_manifeste`) ; les chemins de `terraform.tfvars.example` sont relatifs au dossier du module.
+- Variante GitHub pour le worker seulement : tag `git tag v0.1.0 && git push origin v0.1.0` (ou `gh workflow run release.yml --repo RuneRide/runeride-weather`), puis `gh release download v0.1.0 --repo RuneRide/runeride-weather --dir dist && (cd dist && sha256sum -c *.sha256)`.
 
 ## 6. Fond de carte (175 Mo) : envoi, une seule fois
 
@@ -132,9 +133,21 @@ Deux voies. La voie A suffit pour ouvrir le viewer avant que le poller existe ; 
   ```
   Le manifeste du PoC date du 18/10 (tirage du 17/10) : le viewer affichera l'avis « prévisions de plus de 30 h » tant que le pipeline réel n'a pas pris le relais ; c'est le comportement voulu.
 
+  **Attention, durée de vie.** Les objets envoyés sous `v1/arome/`, `v1/arome-hd/` et `v1/isobares/` sont supprimés par le cycle de vie 2 à 3 jours après leur envoi, alors que `v1/manifest.json` n'expire jamais : passé ce délai, le manifeste cite des fichiers absents (viewer en erreur). La voie A sert à tester, pas à rester en ligne : enchaîner avec la voie B ou supprimer le manifeste.
+
 **Voie B : pipeline réel**
 
-- [ ] **[TOI]** Activer poller et manifeste dans le module (`activer_poller`, `activer_manifeste`, voir son README), poster un message de test dans `file_jobs`, vérifier journaux et alarmes, puis laisser tourner 24 h.
+Ordre : worker d'abord (testé à la main), manifeste ensuite, poller en dernier. Noms de fonctions : `terraform output worker`, `manifeste`, `poller` (`runeride-production-meteo-<rôle>`).
+
+- [ ] **[TOI]** Worker seul (déjà appliqué au §4) : poster un message de test, tirage récent publié chez Météo-France :
+  ```sh
+  aws sqs send-message --queue-url "$(terraform -chdir=../runeride-cloud/terraform/meteo output -raw file_jobs)" \
+    --message-body '{"modele":"arome","tirage":"<AAAA-MM-JJTHH:00:00Z>","echeance":12}' --profile bike360 --region eu-north-1
+  aws s3 ls "s3://$BUCKET/v1/arome/<AAAA-MM-JJTHHZ>/" --recursive --profile bike360 --region eu-north-1 | head
+  ```
+  Attendu : 8 `.pmtiles`, un `_etat/12.json`, un GeoJSON sous `v1/isobares/arome/…` ; file de rebut vide (`terraform output file_rebut`).
+- [ ] **[TOI]** `activer_manifeste = true` (+ `chemin_zip_manifeste`), `terraform apply`. Reconstruction forcée : `aws lambda invoke --function-name <manifeste> --payload '{}' --cli-binary-format raw-in-base64-out /dev/stdout --profile bike360 --region eu-north-1`, puis le §9 (manifeste). Si l'`apply` refuse la concurrence réservée : voir le quota au §4.
+- [ ] **[TOI]** `activer_poller = true` (+ `chemin_zip_poller`). D'abord à blanc : `aws lambda invoke --function-name <poller> --payload '{"simulation":true}' --cli-binary-format raw-in-base64-out /dev/stdout --profile bike360 --region eu-north-1` (liste et décide, n'envoie ni n'écrit rien), lire le bilan, puis laisser le Scheduler (5 min) tourner. Surveiller 24 h : journaux (`aws logs tail /aws/lambda/<fonction> --since 1h`), file des tâches, file de rebut, alarmes.
 
 ## 8. Déploiement du viewer
 
@@ -178,8 +191,8 @@ Viewer (navigateur, fenêtre privée, `https://weather.runeride.fr/`) :
 | **Viewer** | Revenir à la version précédente : `git revert <commit>` puis push (le workflow redéploie), ou `gh workflow run deploy.yml --ref <tag-ou-commit-sain> --repo RuneRide/runeride-weather`. Pour couper net l'accès : renommer `~/weather/index.html` dans cPanel (Gestionnaire de fichiers) ou supprimer le sous-domaine. |
 | **Service worker en cause** (page figée chez des visiteurs) | Incrémenter `VERSION` dans `viewer/sw.js` et redéployer ; en urgence, publier un `sw.js` qui appelle `self.registration.unregister()` et vide les caches. |
 | **Manifeste** | Pas de versionnage S3 : remettre la copie faite au §7 (`aws s3 cp manifest-avant.json "s3://$BUCKET/v1/manifest.json" --content-type application/json --cache-control "public, max-age=30"`) ou laisser la Lambda `manifeste` le reconstruire. Cache de 30 s : l'effet est visible en moins d'une minute. |
-| **Tirage défectueux** | Supprimer ses objets (`aws s3 rm "s3://$BUCKET/v1/arome/<tirage>/" --recursive`) **puis** régénérer le manifeste ; les anciens fichiers restent 1 an dans les caches CloudFront si leur contenu a été corrigé sous le même nom : invalider par chemin (`aws cloudfront create-invalidation …`, 1 000 chemins gratuits/mois) ou utiliser une révision dans le chemin (décision ouverte n° 6 de architecture-aws.md). |
-| **Pipeline** | Couper l'alimentation : `mapping_actif = false` (module), ou désactiver la règle EventBridge du poller. Les données déjà publiées restent servies. |
+| **Tirage défectueux** | Supprimer ses objets (`aws s3 rm "s3://$BUCKET/v1/arome/<tirage>/" --recursive`, `…/v1/isobares/arome/<tirage>/` et le marqueur `…/v1/_poller/arome/<tirage>.json` : tant que le marqueur dit « terminé », le poller ne retraite pas ce tirage) **puis** régénérer le manifeste (invocation de la Lambda `manifeste`, §7) ; les anciens fichiers restent 1 an dans les caches CloudFront si leur contenu a été corrigé sous le même nom : invalider par chemin (`aws cloudfront create-invalidation …`, 1 000 chemins gratuits/mois) ou utiliser une révision dans le chemin (décision ouverte n° 6 de architecture-aws.md). |
+| **Pipeline** | Couper l'alimentation : `mapping_actif = false` (module : la file n'est plus consommée, mais le poller continue d'y poster ; messages conservés 4 jours), et désactiver le planning EventBridge Scheduler du poller dans la console (état `DISABLED` ; Terraform le remettrait en marche au prochain `apply`) ou `activer_poller = false` (détruit la fonction). Les données déjà publiées restent servies. |
 | **Fond de carte** | Remettre `FICHIER_FOND` à l'ancien nom (les anciens fichiers ne sont jamais écrasés) et redéployer. |
 | **DNS / CloudFront** | Supprimer le CNAME `weather-data` chez o2switch : le viewer affiche alors « Prévisions indisponibles » avec un bouton « Réessayer ». `terraform destroy` seulement après sauvegarde et accord explicite (le bucket contient les tirages). |
 | **Hébergement** | `AWS_PROFILE=bike360 tools/ftp-setup.sh --apply --rotate` change le mot de passe FTP ; supprimer le compte `deploy-weather` dans cPanel pour couper le déploiement. |
